@@ -43,15 +43,19 @@ log() { printf '[scanopy-bootstrap] %s\n' "$*"; }
 
 command -v jq >/dev/null || { log "FAIL: 需要 jq(sudo apt install jq / yum install jq)"; exit 1; }
 
-COOKIE_JAR="/tmp/scanopy-bootstrap-cookies-$$.txt"
-trap 'docker compose exec -T n9e rm -f "$COOKIE_JAR" 2>/dev/null || true' EXIT
+# scanopy 0.16.2 起登录返回的 session_id cookie 强制带 Secure 标志(即便
+# SCANOPY_USE_SECURE_SESSION_COOKIES=false 也无视)。curl 在容器内走 http://scanopy 明文直连时
+# 既不存也不回传 Secure cookie → cookie jar 永远空 → 所有 /api/v1/* 返回 401。
+# 故不用 cookie jar:登录后从响应头手动提取 session_id,后续用 -H "Cookie: session_id=..." 显式带,
+# 绕过 curl 的 Secure-cookie 策略。
+SESSION_ID=""
 
 # curl 走 n9e 容器(它跟 scanopy 同 docker network,scanopy:60072 直通)
 sc_curl() {
     local method="$1" path="$2" body="${3:-}"
     local cmd=(docker compose exec -T n9e curl -sS -X "$method"
-        -H 'Content-Type: application/json' --max-time 10
-        -c "$COOKIE_JAR" -b "$COOKIE_JAR")
+        -H 'Content-Type: application/json' --max-time 10)
+    [ -n "$SESSION_ID" ] && cmd+=(-H "Cookie: session_id=${SESSION_ID}")
     [ -n "$body" ] && cmd+=(-d "$body")
     cmd+=("${SCANOPY_HOST}${path}")
     "${cmd[@]}"
@@ -84,15 +88,23 @@ else
     log "注册失败(可能账号已存在,继续 login)"
 fi
 
-# ============ 4. login(拿 session cookie + user/org id)============
+# ============ 4. login(提取 session_id + user/org id)============
 log "POST /api/auth/login"
 LOGIN_BODY=$(jq -nc --arg e "$SCANOPY_ADMIN_EMAIL" --arg p "$SCANOPY_ADMIN_PASSWORD" \
     '{email:$e, password:$p}')
-LOGIN_RESP=$(sc_curl POST /api/auth/login "$LOGIN_BODY")
+# -i 同时拿响应头(含 Set-Cookie: session_id=...)和 body;header/body 以空行分隔。
+# 不经 sc_curl,因为这一步要解析 header 而非只取 body。
+LOGIN_RAW=$(docker compose exec -T n9e curl -sS -i -X POST \
+    -H 'Content-Type: application/json' --max-time 10 \
+    -d "$LOGIN_BODY" "${SCANOPY_HOST}/api/auth/login")
+SESSION_ID=$(printf '%s' "$LOGIN_RAW" | tr -d '\r' \
+    | sed -n 's/^[Ss]et-[Cc]ookie: *session_id=\([^;]*\).*/\1/p' | head -1)
+LOGIN_RESP=$(printf '%s' "$LOGIN_RAW" | tr -d '\r' | awk 'body{print} /^$/{body=1}')
 if [ "$(echo "$LOGIN_RESP" | jq -r '.success // false')" != "true" ]; then
     log "FAIL: 登录失败 — 响应: $(echo "$LOGIN_RESP" | head -c 300)"
     exit 1
 fi
+[ -n "$SESSION_ID" ] || { log "FAIL: 未能从登录响应头提取 session_id"; exit 1; }
 
 USER_ID=$(echo "$LOGIN_RESP" | jq -r '.data.id // empty')
 ORG_ID=$(echo "$LOGIN_RESP" | jq -r '.data.organization_id // empty')

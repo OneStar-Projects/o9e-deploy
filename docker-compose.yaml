@@ -151,7 +151,8 @@ services:
       scanopy-postgres: { condition: service_healthy }
       scanopy-daemon:   { condition: service_started }
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:60072/api/v1/health || wget -qO- http://127.0.0.1:60072/health || exit 1"]
+      # 镜像内无 wget,只有 curl(对齐上游 daemon healthcheck);端点 /api/v1/health 实测 200
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:60072/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
