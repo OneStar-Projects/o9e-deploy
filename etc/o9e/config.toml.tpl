@@ -4,7 +4,7 @@
 #   - JWTAuth.AccessExpired=0 → token 秒过期 → 登录回跳
 #   - APIForAgent.Enable=false → agent 上报全部 401
 # 所以本文件必须把所有「Enable=true / 关键阈值」完整列出。
-# 修改密码/连接信息请改仓库根的 .env,然后 docker compose up -d n9e。
+# 修改密码/连接信息请改 .env(与 docker-compose.yaml 同目录),然后 docker compose up -d n9e。
 
 [Global]
 RunMode = "release"
