@@ -1,0 +1,213 @@
+name: n9e-single
+
+networks:
+  n9e:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  vm-data:
+  n9e-logs:
+  scanopy-postgres-data:
+  scanopy-daemon-config:
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: o9e-mysql
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 上游 schema(批量,initsql/ 是 nightingale/docker/initsql/ 的真目录副本)
+      # 注意:父目录不能加 :ro — 下一行还要在里面挂 d-cfgsync.sql,runc 不允许在只读挂载点上创建子 mountpoint
+      - ./initsql:/docker-entrypoint-initdb.d
+      # 本仓库 fork 增量,单文件 bind mount,字典序 d- 保证在上游 a-/c- SQL 之后跑(ASCII '0'<'a',原 02- 反而抢跑)
+      - ./initsql-extra/d-cfgsync.sql:/docker-entrypoint-initdb.d/d-cfgsync.sql:ro
+      - ./etc/mysql/my.cnf:/etc/my.cnf:ro
+    networks: [n9e]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      # 首次启动 mysql 要走完 initdb(创数据目录 ~90s)+ 跑 a-n9e.sql/d-cfgsync.sql(慢盘下可能 1-2 分钟),
+      # 老配置 start_period 30s + retries 10 = 130s,擦边超时 → n9e 因 depends_on 卡死。
+      # 拉宽到 90s + 60×10s = 690s,给慢盘留余地;次启起来很快,不会真的等满。
+      retries: 60
+      start_period: 90s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: o9e-redis
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis-data:/data
+    networks: [n9e]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.93.15
+    container_name: o9e-vm
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+    command:
+      - "--storageDataPath=/vm-data"
+      - "--retentionPeriod=${VM_RETENTION:-3}"
+      - "--httpListenAddr=:8428"
+      - "--loggerTimezone=Asia/Shanghai"
+    volumes:
+      - vm-data:/vm-data
+    networks: [n9e]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  # ─── scanopy 官方 3 服务套餐(网络拓扑发现)──────────────────
+  # 上游 docker-compose:https://github.com/scanopy/scanopy/blob/main/docker-compose.yml
+  # n9e 通过 /api/scanopy/* 反代到下面的 scanopy 容器(就是上游的 "server")。
+  # daemon 必须 host network + privileged 才能扫描真实网络。
+
+  scanopy-daemon:
+    image: ghcr.io/scanopy/scanopy/daemon:latest
+    container_name: o9e-scanopy-daemon
+    network_mode: host                       # 扫描需要直接看到宿主网卡
+    privileged: true                          # daemon 要发起 raw socket / ARP
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      SCANOPY_LOG_LEVEL: ${SCANOPY_LOG_LEVEL:-info}
+      SCANOPY_SERVER_URL: http://127.0.0.1:60072
+    volumes:
+      - scanopy-daemon-config:/root/.config/daemon
+      # 注释掉下面这行可关闭 Docker 容器拓扑发现
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:60073/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  scanopy-postgres:
+    image: postgres:17-alpine
+    container_name: o9e-scanopy-postgres
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_DB: scanopy
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${SCANOPY_POSTGRES_PASSWORD}
+    volumes:
+      - scanopy-postgres-data:/var/lib/postgresql/data
+    networks: [n9e]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scanopy:
+    # 上游叫 "server",这里保持服务名 "scanopy" 兼容 n9e config:
+    #   [Center] ScanopyUrl = "http://scanopy:60072"
+    image: ghcr.io/scanopy/scanopy/server:latest
+    container_name: o9e-scanopy
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      SCANOPY_LOG_LEVEL: ${SCANOPY_LOG_LEVEL:-info}
+      SCANOPY_DATABASE_URL: postgresql://postgres:${SCANOPY_POSTGRES_PASSWORD}@scanopy-postgres:5432/scanopy
+      SCANOPY_WEB_EXTERNAL_PATH: /app/static
+      SCANOPY_PUBLIC_URL: https://${N9E_DOMAIN:-o9e.local}/api/scanopy
+      # daemon 跑在 host network,只能通过 host.docker.internal 反查
+      SCANOPY_INTEGRATED_DAEMON_URL: http://host.docker.internal:60073
+      # bootstrap 脚本走 .env 读这些;透传给容器 env(镜像不一定用,但放着无害)
+      SCANOPY_ADMIN_EMAIL:    ${SCANOPY_ADMIN_EMAIL:-}
+      SCANOPY_ADMIN_PASSWORD: ${SCANOPY_ADMIN_PASSWORD:-}
+      SCANOPY_ORG_NAME:       ${SCANOPY_ORG_NAME:-o9e}
+      SCANOPY_NETWORK_NAME:   ${SCANOPY_NETWORK_NAME:-default}
+      # 首次部署保持 false 让 bootstrap 能 register admin;之后 ./scanopy-lock-registration.sh 改 true
+      SCANOPY_DISABLE_REGISTRATION: ${SCANOPY_DISABLE_REGISTRATION:-false}
+      # 走 nginx HTTPS 反代后面,启用 secure cookie
+      SCANOPY_USE_SECURE_SESSION_COOKIES: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # 让容器解析 host.docker.internal 到宿主网关
+    expose:
+      - "60072"
+    networks: [n9e]
+    depends_on:
+      scanopy-postgres: { condition: service_healthy }
+      scanopy-daemon:   { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:60072/api/v1/health || wget -qO- http://127.0.0.1:60072/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  n9e:
+    # 镜像从 Docker Hub 拉取(fuqiangleon/o9e),由 monorepo 的 scripts/build-image.sh
+    # 构建并 push。本部署仓库纯 pull,不在现场 build,故无 build 段。
+    # 切版本改 .env 的 O9E_TAG,然后 docker compose pull n9e && docker compose up -d n9e。
+    image: fuqiangleon/o9e:${O9E_TAG:-latest}
+    container_name: o9e
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      GIN_MODE: release
+      N9E_DB_USER:     ${N9E_DB_USER}
+      N9E_DB_PASSWORD: ${N9E_DB_PASSWORD}
+      REDIS_PASSWORD:  ${REDIS_PASSWORD}
+      # entrypoint 的 envsubst 用,渲染进 config.toml 的 [Center] ScanopyToken
+      SCANOPY_TOKEN:   ${SCANOPY_TOKEN:-}
+    volumes:
+      # 只挂 .tpl 模板进去(只读),容器内 /app/etc 目录保持镜像里的拥有者,
+      # entrypoint 才能 `envsubst > config.toml.tmp && mv` 渲染配置。
+      # 整目录 bind mount 会把目录 owner 盖成宿主 root,容器内进程写不进去 → Permission denied。
+      - ./etc/o9e/config.toml.tpl:/app/etc/config.toml.tpl:ro
+      - n9e-logs:/app/logs
+    networks: [n9e]
+    depends_on:
+      mysql:           { condition: service_healthy }
+      redis:           { condition: service_healthy }
+      victoriametrics: { condition: service_healthy }
+      scanopy:         { condition: service_healthy }
+    expose:
+      - "17000"
+      - "20090"
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: o9e-nginx
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      # auto-cert.sh 用,缺证书自动签时的 CN/SAN 来源(优先用配置的域名,否则 o9e.local)
+      AUTO_CERT_CN: ${N9E_DOMAIN:-o9e.local}
+    volumes:
+      - ./etc/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./etc/nginx/conf.d:/etc/nginx/conf.d:ro
+      # tls 目录不能 :ro — auto-cert.sh 缺证书时需要在这里写入新生成的 fullchain/privkey
+      - ./etc/tls:/etc/nginx/tls
+      # nginx 镜像的 /docker-entrypoint.d/*.sh 会被主 entrypoint 自动 source,
+      # 在 nginx -g 启动前跑;05- 前缀让它在内置 10-listen-on-ipv6 之前执行。
+      - ./etc/nginx/auto-cert.sh:/docker-entrypoint.d/05-auto-cert.sh:ro
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${IBEX_RPC_PORT:-20090}:20090"
+    depends_on:
+      n9e: { condition: service_healthy }
+    networks: [n9e]
