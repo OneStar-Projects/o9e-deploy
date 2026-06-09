@@ -55,7 +55,12 @@ MetricsYamlFile = "/app/etc.default/metrics.yaml"
 # Scanopy 反向代理 — n9e 把 /api/scanopy/* 转发到这里(scanopy 容器内部地址)
 # 留空时 /api/scanopy/* 返回 503,前端拓扑页降级展示
 ScanopyUrl   = "http://scanopy:60072"
-ScanopyToken = "${SCANOPY_TOKEN:-}"
+# 注意:容器 envsubst 是 GNU 版,不支持 ${VAR:-default},token 必须用 plain ${VAR}(未设渲染为空)
+ScanopyToken = "${SCANOPY_TOKEN}"
+
+# topo-studio 反代(前端「网络拓扑」)。留空时该页返回 not configured。
+TopoStudioUrl   = "http://topo-studio:18080"
+TopoStudioToken = "${TOPO_API_TOKEN}"
 
 # 部分匿名查询路径(指标查询/告警详情)。缺这块默认 false → 未登录调 API 全 401。
 [Center.AnonymousAccess]

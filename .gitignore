@@ -1,0 +1,14 @@
+# 运行时机密 / 生成物,绝不入库
+.env
+
+# TLS 证书(自备真证书或 nginx auto-cert 现签),只保留 .gitkeep 和 README
+etc/tls/*.pem
+etc/tls/*.key
+
+# 误拷的预编译二进制(本仓库纯 pull,不该有)
+/n9e
+
+# 备份文件
+*.sql.bak
+backup-*.sql
+/1/
