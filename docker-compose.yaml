@@ -191,6 +191,10 @@ services:
     expose:
       - "17000"
       - "20090"
+    # 发布 17000 到宿主:给跑在别的机器上的 categraf agent 直连(remote-write/heartbeat/cfgsync)。
+    # 注意:明文 HTTP 暴露整个 n9e API(含 Web 登录),建议用防火墙把 17000 限制到 agent 来源 IP。
+    ports:
+      - "17000:17000"
 
   nginx:
     image: nginx:1.25-alpine
