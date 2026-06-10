@@ -34,24 +34,32 @@ gen_pwd() {
     head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 32
 }
 
+gen_hex32() {
+    # 64 个 hex 字符(= 32 字节,AES-256)。给 N9E_SECRET_MASTER_KEY 用。
+    # 纯 coreutils(od),不依赖 openssl;与 n9e center 的 hex.DecodeString 要求一致。
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
 MYSQL_ROOT_PWD="$(gen_pwd)"
 N9E_DB_PWD="${MYSQL_ROOT_PWD}"   # initsql 默认 user=root,两个密码必须相同
 REDIS_PWD="$(gen_pwd)"
 SCANOPY_ADMIN_PWD="$(gen_pwd)"   # scanopy 管理员密码,scanopy-bootstrap.sh 用它注册/登录
 SCANOPY_PG_PWD="$(gen_pwd)"      # scanopy 后端 postgres 密码(独立于 n9e mysql)
 TOPO_API_TOKEN_VAL="$(gen_pwd)"   # topo-studio API 鉴权 token
+MASTER_KEY_VAL="$(gen_hex32)"     # cfgsync 秘钥库 master key(AES-256,64 hex);丢失即 DB 密文全废,务必备份
 
 # 用 awk 一次性重写,跨平台一致
 # SCANOPY_TOKEN 不在这里生成 — 由部署后跑 ./scanopy-bootstrap.sh 调 scanopy API 拿真 token 后写回
 awk -v mysql="${MYSQL_ROOT_PWD}" -v n9e="${N9E_DB_PWD}" -v redis="${REDIS_PWD}" \
     -v scanopy_admin="${SCANOPY_ADMIN_PWD}" -v scanopy_pg="${SCANOPY_PG_PWD}" \
-    -v topo_token="${TOPO_API_TOKEN_VAL}" '
+    -v topo_token="${TOPO_API_TOKEN_VAL}" -v master_key="${MASTER_KEY_VAL}" '
 /^MYSQL_ROOT_PASSWORD=/       { print "MYSQL_ROOT_PASSWORD=" mysql; next }
 /^N9E_DB_PASSWORD=/           { print "N9E_DB_PASSWORD=" n9e; next }
 /^REDIS_PASSWORD=/            { print "REDIS_PASSWORD=" redis; next }
 /^SCANOPY_ADMIN_PASSWORD=/    { print "SCANOPY_ADMIN_PASSWORD=" scanopy_admin; next }
 /^SCANOPY_POSTGRES_PASSWORD=/ { print "SCANOPY_POSTGRES_PASSWORD=" scanopy_pg; next }
 /^TOPO_API_TOKEN=/            { print "TOPO_API_TOKEN=" topo_token; next }
+/^N9E_SECRET_MASTER_KEY=/     { print "N9E_SECRET_MASTER_KEY=" master_key; next }
 { print }
 ' "${SRC}" > "${DST}"
 
@@ -64,5 +72,7 @@ echo "[init-env]     REDIS_PASSWORD"
 echo "[init-env]     SCANOPY_ADMIN_PASSWORD (scanopy-bootstrap.sh 注册/登录用)"
 echo "[init-env]     SCANOPY_POSTGRES_PASSWORD (scanopy 后端 postgres)"
 echo "[init-env]     TOPO_API_TOKEN (topo-studio API 鉴权,n9e 反代带 Bearer)"
+echo "[init-env]   N9E_SECRET_MASTER_KEY 已生成 64 hex(AES-256,cfgsync 秘钥库)"
+echo "[init-env]     ⚠ 务必备份此 key:丢失/变更 → DB 里所有 cfgsync 密文永久解不开"
 echo "[init-env] SCANOPY_TOKEN 留空 — 部署后跑 ./scanopy-bootstrap.sh,它会调 scanopy API 创 key 后写回这里"
 echo "[init-env] 其它字段(端口/域名/admin email)保持模板默认,如需调整请编辑 ${DST}"
