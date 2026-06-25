@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# 从 .env.example 派生 .env,自动生成 3 个强随机密码。
+# 从 .env.example 派生 .env(自动生成强随机密码);并为 nginx 预生成自签 TLS 证书。
 #
 # 行为:
-#   - .env 已存在 → 拒绝覆盖(避免误删运维改过的值,先 mv 备份再重跑)
+#   - .env 已存在 → 跳过 .env 生成(避免覆盖运维改过的值,先 mv 备份再重跑)
 #   - .env 不存在 → 拷贝 .env.example 并替换:
 #       MYSQL_ROOT_PASSWORD / N9E_DB_PASSWORD / REDIS_PASSWORD
 #     用 32 字符 A-Za-z0-9 强随机替换占位符
+#   - etc/tls/{fullchain,privkey}.pem 缺失 → 用宿主 openssl 预签自签证书(CN=N9E_DOMAIN)
+#     原因:nginx 容器内无出网路径,无法 apk 装 openssl 自签,故移到宿主侧做
 #
 # 设计约束:
 #   - 默认 initsql 用 N9E_DB_USER=root,所以 MYSQL_ROOT 和 N9E_DB 必须同一个密码
@@ -21,10 +23,10 @@ if [ ! -f "${SRC}" ]; then
     exit 1
 fi
 
+SKIP_ENV=0
 if [ -f "${DST}" ]; then
-    echo "[init-env] ${DST} 已存在,不覆盖。"
-    echo "[init-env] 如需重新生成,先 mv .env .env.bak.\$(date +%s) 再重跑。"
-    exit 0
+    echo "[init-env] ${DST} 已存在,跳过 .env 生成(如需重生成,先 mv .env .env.bak.\$(date +%s) 再重跑)。"
+    SKIP_ENV=1
 fi
 
 gen_pwd() {
@@ -40,6 +42,39 @@ gen_hex32() {
     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
 }
 
+gen_tls_cert() {
+    # nginx 容器内无出网路径(只有宿主有 gost 代理),缺证书时它的 auto-cert.sh 会
+    # apk add openssl 自签 → 拉不到 alpine 源而失败。故在宿主预签好放进 etc/tls/,
+    # 让容器里 auto-cert.sh 命中"已有证书"分支直接跳过,不再走 apk。
+    local cert="${DIR}/etc/tls/fullchain.pem"
+    local key="${DIR}/etc/tls/privkey.pem"
+
+    if [ -s "${cert}" ] && [ -s "${key}" ]; then
+        echo "[init-env] TLS 证书已存在,跳过 (${cert})"
+        return 0
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "[init-env] WARN: 宿主无 openssl,无法预生成自签证书。" >&2
+        echo "[init-env]       请手动放入 etc/tls/{fullchain,privkey}.pem,否则 nginx 启动会失败。" >&2
+        return 0
+    fi
+
+    # CN 取 .env 里的 N9E_DOMAIN,缺省 o9e.local(与 compose 的 AUTO_CERT_CN 默认一致)
+    local cn
+    cn="$(grep -E '^N9E_DOMAIN=' "${DST}" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+    cn="${cn:-o9e.local}"
+
+    mkdir -p "${DIR}/etc/tls"
+    echo "[init-env] 预生成自签证书 CN=${cn}(容器内无法 apk 装 openssl,故在宿主签好)"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -keyout "${key}" -out "${cert}" \
+        -subj "/CN=${cn}" \
+        -addext "subjectAltName=DNS:${cn},DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+    chmod 600 "${key}"
+    echo "[init-env] 已生成 etc/tls/{fullchain,privkey}.pem(自签 RSA2048/365 天);生产请换真证书。"
+}
+
+if [ "${SKIP_ENV}" = 0 ]; then
 MYSQL_ROOT_PWD="$(gen_pwd)"
 N9E_DB_PWD="${MYSQL_ROOT_PWD}"   # initsql 默认 user=root,两个密码必须相同
 REDIS_PWD="$(gen_pwd)"
@@ -76,3 +111,7 @@ echo "[init-env]   N9E_SECRET_MASTER_KEY 已生成 64 hex(AES-256,cfgsync 秘钥
 echo "[init-env]     ⚠ 务必备份此 key:丢失/变更 → DB 里所有 cfgsync 密文永久解不开"
 echo "[init-env] SCANOPY_TOKEN 留空 — 部署后跑 ./scanopy-bootstrap.sh,它会调 scanopy API 创 key 后写回这里"
 echo "[init-env] 其它字段(端口/域名/admin email)保持模板默认,如需调整请编辑 ${DST}"
+fi
+
+# --- TLS 自签证书(容器内无法 apk 装 openssl,故在宿主预生成)---
+gen_tls_cert
