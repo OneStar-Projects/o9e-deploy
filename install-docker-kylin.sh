@@ -12,6 +12,15 @@
 #         chmod +x install-docker-kylin.sh
 #         sudo ./install-docker-kylin.sh
 #
+#  ----- 代理开关(本机需经代理才能出网时使用)-----
+#    直连出网(默认):
+#         sudo ./install-docker-kylin.sh
+#
+#    走代理出网:
+#         sudo USE_PROXY=1 ./install-docker-kylin.sh
+#         # 默认代理地址 http://127.0.0.1:8080,可自定义:
+#         sudo USE_PROXY=1 PROXY_ADDR=http://127.0.0.1:8080 ./install-docker-kylin.sh
+#
 #  !!! 不要把脚本内容整段复制粘贴到终端执行 !!!
 #  !!! 必须先保存成文件再运行 !!!
 ###############################################################################
@@ -46,9 +55,78 @@ fi
 # ===== 记录原始用户(给 docker 组用) =====
 ORIG_USER="${SUDO_USER:-$USER}"
 
+###############################################################################
+# 代理开关
+#   USE_PROXY=1 时启用; PROXY_ADDR 自定义代理地址(默认 127.0.0.1:8080)
+#   作用范围: curl(环境变量) + yum(yum.conf) + docker daemon(systemd)
+#   no_proxy 只排除本地/内网,绝不排除镜像源域名
+###############################################################################
+USE_PROXY="${USE_PROXY:-0}"
+PROXY_ADDR="${PROXY_ADDR:-http://127.0.0.1:8080}"
+NO_PROXY_LIST="localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+YUM_CONF="/etc/yum.conf"
+YUM_PROXY_ADDED=0   # 标记 yum.conf 是否被本脚本临时改动
+
+setup_proxy() {
+    [[ "$USE_PROXY" != "1" ]] && { log_info "代理: 未启用(直连出网)"; return 0; }
+
+    log_step "启用代理: $PROXY_ADDR"
+
+    # 1) curl / wget 等读环境变量
+    export http_proxy="$PROXY_ADDR"
+    export https_proxy="$PROXY_ADDR"
+    export HTTP_PROXY="$PROXY_ADDR"
+    export HTTPS_PROXY="$PROXY_ADDR"
+    export no_proxy="$NO_PROXY_LIST"
+    export NO_PROXY="$NO_PROXY_LIST"
+    log_ok "已设置 curl/wget 代理环境变量"
+
+    # 2) 验证代理链是否可用(用镜像源做探测)
+    log_info "验证代理可达性..."
+    if curl -sI --max-time 8 -x "$PROXY_ADDR" https://mirrors.aliyun.com > /dev/null; then
+        log_ok "代理可访问 mirrors.aliyun.com"
+    else
+        log_error "代理 $PROXY_ADDR 无法访问外网,请先确认 gost/SOCKS5/隧道是否正常"
+        log_error "排查: ss -lntp | grep 8080 ; curl -sI -x $PROXY_ADDR https://mirrors.aliyun.com"
+        exit 1
+    fi
+
+    # 3) yum 走代理(yum 不读环境变量,需写 yum.conf)
+    if ! grep -q "^proxy=$PROXY_ADDR$" "$YUM_CONF" 2>/dev/null; then
+        sed -i '/^proxy=/d' "$YUM_CONF"
+        echo "proxy=$PROXY_ADDR" >> "$YUM_CONF"
+        YUM_PROXY_ADDED=1
+        log_ok "已为 yum 配置代理(退出时自动清理)"
+    fi
+
+    # 4) docker daemon 走代理(dockerd 不读环境变量,需 systemd drop-in)
+    mkdir -p /etc/systemd/system/docker.service.d
+    cat > /etc/systemd/system/docker.service.d/http-proxy.conf <<EOF
+[Service]
+Environment="HTTP_PROXY=$PROXY_ADDR"
+Environment="HTTPS_PROXY=$PROXY_ADDR"
+Environment="NO_PROXY=$NO_PROXY_LIST"
+EOF
+    log_ok "已为 docker daemon 配置代理(保留,供后续拉镜像使用)"
+}
+
+cleanup_proxy() {
+    # 仅清理 yum.conf 的临时代理; docker daemon 代理保留
+    if [[ "$YUM_PROXY_ADDED" == "1" ]]; then
+        sed -i '/^proxy='"$(printf '%s' "$PROXY_ADDR" | sed 's/[\/&]/\\&/g')"'$/d' "$YUM_CONF" 2>/dev/null || true
+        log_info "已清理 yum.conf 临时代理"
+    fi
+}
+trap cleanup_proxy EXIT
+
+# 立即应用代理设置
+setup_proxy
+
 # ===== 配置项 =====
 DOCKER_VERSION="26.1.2-1.el8"
 DOCKER_REPO_URL="https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo"
+# 包下载镜像站: aliyun 对个别 rpm 偶发 403, 默认换用清华; 可用 DOCKER_MIRROR 覆盖
+DOCKER_MIRROR="${DOCKER_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}"
 DOCKER_REPO_FILE="/etc/yum.repos.d/docker-ce.repo"
 CONTAINER_SELINUX_URL="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/container-selinux-2.229.0-2.module_el8.10.0+4082+f7f0c95e.noarch.rpm"
 ALMALINUX_REPO="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/"
@@ -79,10 +157,12 @@ else
     log_warn "未检测到 /etc/kylin-release,可能不是麒麟系统"
 fi
 
+# 注意: 启用代理时 curl 会自动读取 http_proxy/https_proxy 环境变量
 if curl -sI --max-time 5 https://mirrors.aliyun.com > /dev/null; then
     log_ok "网络: mirrors.aliyun.com 可访问"
 else
     log_error "无法访问 mirrors.aliyun.com,请检查网络"
+    [[ "$USE_PROXY" != "1" ]] && log_error "提示: 本机若需代理出网,请用 sudo USE_PROXY=1 $0"
     exit 1
 fi
 
@@ -116,6 +196,10 @@ fi
 # 强制改成指向 CentOS 8(避免麒麟当成 el10)
 sed -i 's|/centos/\$releasever|/centos/8|g' "$DOCKER_REPO_FILE"
 log_ok "源已配置指向 CentOS 8"
+
+# aliyun 对部分 rpm 返回 403, 把 baseurl/gpgkey 统一换到可靠镜像站
+sed -i "s|https://mirrors.aliyun.com|$DOCKER_MIRROR|g" "$DOCKER_REPO_FILE"
+log_ok "包源已切换到 $DOCKER_MIRROR"
 
 # 刷新缓存
 yum clean all > /dev/null 2>&1
@@ -179,7 +263,11 @@ fi
 ###############################################################################
 log_step "步骤 5/8: 安装 Docker CE $DOCKER_VERSION"
 
-yum install -y \
+# 经代理时强制串行下载: 代理扛不住 yum 的并发连接, 并发会被上游 403
+YUM_DL_OPT=""
+[[ "$USE_PROXY" == "1" ]] && YUM_DL_OPT="--setopt=max_parallel_downloads=1"
+
+yum install -y $YUM_DL_OPT \
     "docker-ce-$DOCKER_VERSION" \
     "docker-ce-cli-$DOCKER_VERSION" \
     containerd.io \
@@ -193,11 +281,14 @@ log_ok "Docker 安装完成"
 ###############################################################################
 log_step "步骤 6/8: 启动 Docker 服务"
 
+# 若启用了代理, 确保 docker daemon drop-in 生效
+[[ "$USE_PROXY" == "1" ]] && systemctl daemon-reload
 systemctl enable --now docker
 sleep 2
 
 if systemctl is-active --quiet docker; then
     log_ok "Docker 服务运行中"
+    [[ "$USE_PROXY" == "1" ]] && log_ok "Docker daemon 已通过代理 $PROXY_ADDR 出网"
 else
     log_error "Docker 启动失败,日志:"
     journalctl -xeu docker --no-pager | tail -20
@@ -308,6 +399,13 @@ echo "拉镜像示例(用国内加速):"
 echo "  docker pull docker.m.daocloud.io/library/nginx"
 echo "  docker pull docker.m.daocloud.io/grafana/grafana"
 echo ""
+
+if [[ "$USE_PROXY" == "1" ]]; then
+    echo "代理提示:"
+    echo "  Docker daemon 代理已保留在 /etc/systemd/system/docker.service.d/http-proxy.conf"
+    echo "  如需取消代理: rm 该文件后 systemctl daemon-reload && systemctl restart docker"
+    echo ""
+fi
 
 if [[ "$ORIG_USER" != "root" ]]; then
     echo "提示: 重新登录(或执行 newgrp docker)才能免 sudo 使用 docker"
