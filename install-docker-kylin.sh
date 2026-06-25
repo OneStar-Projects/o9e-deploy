@@ -131,12 +131,10 @@ DOCKER_REPO_FILE="/etc/yum.repos.d/docker-ce.repo"
 CONTAINER_SELINUX_URL="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/container-selinux-2.229.0-2.module_el8.10.0+4082+f7f0c95e.noarch.rpm"
 ALMALINUX_REPO="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/"
 
-# 国内镜像源
+# 国内镜像源(dockerproxy/ustc/163 已失效, 仅保留实测可用的 1ms + daocloud)
 MIRRORS=(
+    "https://docker.1ms.run"
     "https://docker.m.daocloud.io"
-    "https://dockerproxy.com"
-    "https://docker.mirrors.ustc.edu.cn"
-    "https://hub-mirror.c.163.com"
 )
 
 ###############################################################################
