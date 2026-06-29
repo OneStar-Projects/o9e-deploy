@@ -175,6 +175,9 @@ services:
       REDIS_PASSWORD:  ${REDIS_PASSWORD}
       # entrypoint 的 envsubst 用,渲染进 config.toml 的 [Center] ScanopyToken
       SCANOPY_TOKEN:   ${SCANOPY_TOKEN:-}
+      # 同样供 envsubst 渲染 config.toml 的 TopoStudioToken;必须与 topo-studio 的
+      # TOPO_API_TOKEN 一致,否则 n9e 反代 topo 带空 token → topo 返回 401
+      TOPO_API_TOKEN:  ${TOPO_API_TOKEN:-}
       # cfgsync 秘钥库 master key(n9e 进程直接 os.Getenv 读,不进 config.toml);
       # 未设则「新建秘钥」报错。务必备份:丢失/变更 → DB 密文全废。
       N9E_SECRET_MASTER_KEY: ${N9E_SECRET_MASTER_KEY:-}
