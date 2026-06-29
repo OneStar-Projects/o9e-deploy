@@ -4,7 +4,7 @@
 现场只需 `git clone` 本仓库,镜像从 Docker Hub 拉取(`fuqiangleon/o9e`),
 **不需要源码、不在现场编译**。后续更新一条 `git pull` 即可。
 
-6 个服务:`mysql / redis / victoriametrics / n9e / nginx / scanopy(3 容器)`。
+7 类服务、共 9 个容器:`mysql / redis / victoriametrics / scanopy(3 容器)/ topo-studio / n9e / nginx`。
 被监控主机的 `categraf` agent **不在 compose 内**,走 n9e 后台的
 "配置中心 → 装机令牌(EnrollToken)" 装机。
 
@@ -22,38 +22,53 @@
 
 ## 首次部署
 
+> 本机若必须经代理才能出网:装 Docker 用 `sudo USE_PROXY=1 ./install-docker-kylin.sh`
+> (详见脚本头部)。镜像拉取走 daemon.json 的国内加速器(1ms)。
+
+**严格按顺序执行**,SCANOPY_TOKEN 必须在服务起来后才能生成:
+
 ```bash
 git clone git@github.com:OneStar-Projects/o9e-deploy.git
 cd o9e-deploy
 
-# 1. 生成 .env(4 个密码自动生成 32 字符强随机;邮箱/域名/端口/tag 模板默认,自行编辑)
+# 1. 初始化:生成 .env(强随机密码 + TOPO_API_TOKEN + MASTER_KEY)、预签 TLS 自签证书、
+#    修正 bind 挂载文件权限。此步 SCANOPY_TOKEN 故意留空(第 4 步才生成)。
 ./init-env.sh
+#    想用真证书:把 fullchain.pem / privkey.pem 放进 etc/tls/ 覆盖自签的即可。
 
-# 2. 证书(可选 — etc/tls/ 为空时 nginx 启动会自动签自签证书,生产建议放真证书)
-#    放真证书直接 cp 进去:
-#      cp /path/to/your.crt etc/tls/fullchain.pem
-#      cp /path/to/your.key etc/tls/privkey.pem
-
-# 3. 拉镜像
+# 2. 拉镜像(走 1ms 加速器)
 docker compose pull
 
-# 4. 启动
+# 3. 启动全栈(9 个容器)
 docker compose up -d
-docker compose ps                  # 各服务应当 healthy
+docker compose ps                  # 各服务应逐步 healthy
+#    ⚠ 此时 topo-studio 报 "Not authenticated"、scanopy 拓扑页降级 —— 正常,
+#       因为 SCANOPY_TOKEN 还没生成,下一步解决。
 
-# 5. 自动 setup scanopy + 创建 User API Key + 写回 .env + restart n9e
+# 4. 生成 SCANOPY_TOKEN:调 scanopy API 创建并启用 User API Key,写回 .env,
+#    并 up -d 重建 n9e + topo-studio 注入新 token(宿主需装 jq)。
 ./scanopy-bootstrap.sh
 
-# 6. 锁定 scanopy 注册(强烈建议)— 防止任何人自助注册新组织/账号
-#    之后新用户只能通过 admin 的 POST /api/v1/invites 邀请加入现 org
+# 5. 锁定 scanopy 注册(强烈建议)— 防止任何人自助注册新组织/账号。
+#    之后新用户只能通过 admin 的 POST /api/v1/invites 邀请加入现 org。
 ./scanopy-lock-registration.sh
 
-# 7. 查看 n9e 启动日志
+# 6. 看 n9e 日志确认就绪
 docker compose logs -f n9e
 ```
 
 浏览器打开 `https://${N9E_DOMAIN}/`(把 `${N9E_DOMAIN}` 替换为 `.env` 设的值)。
 默认账号 `root` / `root.2020`(首次登录强制改密)。
+
+### 两个 token(易混,务必分清)
+
+| token | 用于哪条鉴权链路 | 谁生成 |
+|---|---|---|
+| `SCANOPY_TOKEN` | n9e→scanopy **和** topo-studio→scanopy(消费者向 scanopy 鉴权) | `scanopy-bootstrap.sh` 调 scanopy API 创建,写回 `.env` |
+| `TOPO_API_TOKEN` | n9e→topo-studio(n9e 向 topo-studio 鉴权) | `init-env.sh` 自动生成 |
+
+> 改了 `.env` 里的 token 后,消费它的容器必须用 **`docker compose up -d <svc>` 重建**才生效
+> —— `docker compose restart` 不重新注入 env(容器保留创建时的旧值)。
 
 ## 现场更新(本仓库的核心用途)
 
@@ -139,10 +154,10 @@ docker compose down -v
 ~~~
 o9e-deploy/
 ├── install-docker-kylin.sh      # 麒麟 V10 空机器一键装 Docker(装机前置)
-├── init-env.sh                  # 生成 .env(强随机密码)
-├── scanopy-bootstrap.sh         # 首启自动 setup scanopy + 写回 token
+├── init-env.sh                  # 生成 .env(强随机密码 + TOPO_API_TOKEN)+ 预签 TLS 证书 + 修正挂载权限
+├── scanopy-bootstrap.sh         # 部署后 setup scanopy + 写回 SCANOPY_TOKEN + 重建 n9e/topo-studio
 ├── scanopy-lock-registration.sh # 锁定 scanopy 注册
-├── docker-compose.yaml          # 6 服务编排(镜像走 fuqiangleon/o9e,纯 pull)
+├── docker-compose.yaml          # 9 容器编排(n9e/topo-studio 走 fuqiangleon/o9e,纯 pull)
 ├── .env.example
 ├── etc/
 │   ├── o9e/config.toml.tpl      # n9e 配置模板(entrypoint envsubst 渲染)
