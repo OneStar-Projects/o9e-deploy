@@ -17,7 +17,8 @@
 #   SCANOPY_URL             scanopy server 地址(在能访问它的机器上跑),默认 http://192.168.50.237:60072
 #   SCANOPY_ADMIN_EMAIL     *必填* 管理员邮箱(登录)
 #   SCANOPY_ADMIN_PASSWORD  *必填* 管理员密码
-#   SCANOPY_NETWORK_ID      所有 daemon 绑定的网络(默认 office),汇聚到同一张拓扑
+#   SCANOPY_NETWORK_NAME    所有 daemon 绑定的网络名(默认 office),登录后自动查 id —— 汇聚到同一张拓扑
+#   SCANOPY_NETWORK_ID      可选,显式指定网络 id(优先于按名查;一般不用填)
 #   DAEMON_IMAGE            daemon 镜像,默认 ghcr.io/scanopy/scanopy/daemon:latest
 #   DAEMON_SERVER_URL       写进 compose 的 server 地址(daemon 容器里连的),默认同 SCANOPY_URL
 #   OUT_DIR                 产物目录,默认 ./scanopy-daemons
@@ -26,7 +27,8 @@ set -euo pipefail
 SCANOPY_URL="${SCANOPY_URL:-http://192.168.50.237:60072}"
 ADMIN_EMAIL="${SCANOPY_ADMIN_EMAIL:?需设置 SCANOPY_ADMIN_EMAIL}"
 ADMIN_PASSWORD="${SCANOPY_ADMIN_PASSWORD:?需设置 SCANOPY_ADMIN_PASSWORD}"
-NETWORK_ID="${SCANOPY_NETWORK_ID:-68928351-b0ab-4564-b12d-c8d2677407ec}"   # office
+NETWORK_ID="${SCANOPY_NETWORK_ID:-}"            # 显式指定网络 id(优先);留空则登录后按名字查
+NETWORK_NAME="${SCANOPY_NETWORK_NAME:-office}" # 按网络名查 id(默认 office),scanopy 重装后 id 变也不用改脚本
 DAEMON_IMAGE="${DAEMON_IMAGE:-ghcr.io/scanopy/scanopy/daemon:latest}"
 DAEMON_SERVER_URL="${DAEMON_SERVER_URL:-$SCANOPY_URL}"
 OUT_DIR="${OUT_DIR:-./scanopy-daemons}"
@@ -55,7 +57,21 @@ fi
 [ -n "$SESSION_ID" ] || { echo "ERROR: 未能从登录响应提取 session_id" >&2; exit 1; }
 USER_ID=$(echo "$LOGIN_RESP" | jq -r '.data.id // empty')
 [ -n "$USER_ID" ] || { echo "ERROR: 未拿到 user_id" >&2; exit 1; }
-log "登录成功 user_id=$USER_ID  network_id=$NETWORK_ID"
+log "登录成功 user_id=$USER_ID"
+
+# 解析 network_id:未显式指定 SCANOPY_NETWORK_ID 则按网络名查(GET /networks 匹配 NETWORK_NAME)。
+# 这样 scanopy 重装/network_id 变化后,脚本无需改动。
+if [ -z "$NETWORK_ID" ]; then
+  NETWORK_ID=$(curl -sS -m 10 -H "Cookie: session_id=${SESSION_ID}" \
+    "$SCANOPY_URL/api/v1/networks?limit=0" 2>/dev/null \
+    | jq -r --arg n "$NETWORK_NAME" '.data[] | select(.name==$n) | .id' | head -1)
+  if [ -z "$NETWORK_ID" ]; then
+    echo "ERROR: scanopy 中找不到网络名 '$NETWORK_NAME'。" >&2
+    echo "       先在 scanopy UI 建该网络,或用 SCANOPY_NETWORK_NAME=<名> / SCANOPY_NETWORK_ID=<id> 指定。" >&2
+    exit 1
+  fi
+fi
+log "目标网络: $NETWORK_NAME -> $NETWORK_ID"
 
 mkdir -p "$OUT_DIR"
 created=0
