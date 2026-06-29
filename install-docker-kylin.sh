@@ -262,9 +262,9 @@ fi
 ###############################################################################
 log_step "步骤 5/8: 安装 Docker CE $DOCKER_VERSION"
 
-# 经代理时强制串行下载: 代理扛不住 yum 的并发连接, 并发会被上游 403
-YUM_DL_OPT=""
-[[ "$USE_PROXY" == "1" ]] && YUM_DL_OPT="--setopt=max_parallel_downloads=1"
+# 串行下载: 镜像站(清华/阿里)对并发连接会对个别 rpm 返回 403(实测 docker-ce-cli 中招),
+# 故无论是否走代理都强制单线程下载, 用稳定性换一点速度。
+YUM_DL_OPT="--setopt=max_parallel_downloads=1"
 
 yum install -y $YUM_DL_OPT \
     "docker-ce-$DOCKER_VERSION" \
