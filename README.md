@@ -163,7 +163,7 @@ o9e-deploy/
 │   ├── o9e/config.toml.tpl      # n9e 配置模板(entrypoint envsubst 渲染)
 │   ├── nginx/{nginx.conf, conf.d/n9e.conf, auto-cert.sh}
 │   ├── mysql/my.cnf
-│   └── tls/                     ← 自备真证书;否则 nginx 启动时 auto-cert.sh 现签自签证书
+│   └── tls/                     ← 真证书放这;留空则 init-env.sh 预签自签证书(容器内无法联网装 openssl 自签)
 ├── initsql/                     ← 上游 schema 真目录(自包含)
 └── initsql-extra/               ← fork 的增量 SQL
 ~~~
