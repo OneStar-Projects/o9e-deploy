@@ -148,6 +148,11 @@ services:
       - "host.docker.internal:host-gateway"     # 让容器解析 host.docker.internal 到宿主网关
     expose:
       - "60072"
+    # 映射到宿主:供「不在本机的」scanopy daemon 直连 server(daemon poll 出站到 <宿主IP>:60072)。
+    # ⚠ 这会让 scanopy UI 也从宿主端口直接可达(绕过 nginx);仅内网可信网络用。
+    # 只想本机访问改成 "127.0.0.1:60072:60072"。
+    ports:
+      - "${SCANOPY_PORT:-60072}:60072"
     networks: [n9e]
     depends_on:
       scanopy-postgres: { condition: service_healthy }
