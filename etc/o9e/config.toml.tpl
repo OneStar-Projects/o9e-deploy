@@ -59,7 +59,7 @@ ScanopyUrl   = "http://scanopy:60072"
 ScanopyToken = "${SCANOPY_TOKEN}"
 
 # topo-studio 反代(前端「网络拓扑」)。留空时该页返回 not configured。
-TopoStudioUrl   = "http://topo-studio:18080"
+TopoStudioUrl   = "http://topo-studio:38123"
 TopoStudioToken = "${TOPO_API_TOKEN}"
 
 # 部分匿名查询路径(指标查询/告警详情)。缺这块默认 false → 未登录调 API 全 401。
