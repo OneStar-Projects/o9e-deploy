@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 调 scanopy 真实 API,一键完成首次注册 + 创建 User API Key,写回 .env,重启 n9e。
+# 调 scanopy 真实 API,一键完成首次注册 + 创建 User API Key,写回 .env,重建 n9e + topo-studio。
 #
 # 已在真实 scanopy 0.15.6 上端到端验证过的流程:
 #   1. POST /api/auth/setup    {organization_name, network}            ← 设组织 + 默认网络
@@ -10,7 +10,7 @@
 #      或:POST /api/v1/auth/keys/{id}/rotate                            ← 已存在则 rotate 拿新 plaintext
 #   6. PUT  /api/v1/auth/keys/{id} {is_enabled:true, ...}              ← ⚠ 关键:刚创建的 key 默认 disabled,必须 enable
 #   7. awk 写回 .env 的 SCANOPY_TOKEN
-#   8. docker compose restart n9e
+#   8. docker compose up -d n9e topo-studio  ← 必须 recreate 才注入新 token(restart 不重读 env);topo-studio 也消费此 token
 #
 # 为什么 user_api_key 而不是 daemon_api_key:
 #   - scanopy OpenAPI 里 /api/v1/{topology,networks,credentials,discovery} 的 security 都是
@@ -158,7 +158,9 @@ END { if (!replaced) print "SCANOPY_TOKEN=" tok }
 chmod 600 .env
 log ".env 已更新 SCANOPY_TOKEN"
 
-# ============ 8. restart n9e 让 envsubst 重渲染 config.toml ============
-log "docker compose restart n9e..."
-docker compose restart n9e
+# ============ 8. 重建消费 SCANOPY_TOKEN 的服务,注入新 token ============
+# 用 up -d 而非 restart:restart 不重新注入 env(容器保留创建时的 SCANOPY_TOKEN),
+# 必须 recreate 才能让刚写回 .env 的 token 生效。topo-studio 同样消费此 token,一并重建。
+log "docker compose up -d n9e topo-studio(注入新 SCANOPY_TOKEN)..."
+docker compose up -d n9e topo-studio
 log "完成 ✓ — 浏览器进 n9e 拓扑页验证"
