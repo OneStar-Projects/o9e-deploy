@@ -125,8 +125,9 @@ setup_proxy
 # ===== 配置项 =====
 DOCKER_VERSION="26.1.2-1.el8"
 DOCKER_REPO_URL="https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo"
-# 包下载镜像站: aliyun 对个别 rpm 偶发 403, 默认换用清华; 可用 DOCKER_MIRROR 覆盖
-DOCKER_MIRROR="${DOCKER_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}"
+# 包下载镜像站: 默认用阿里(docker-ce 包源换阿里);若个别 rpm 偶发 403,
+# 可用 DOCKER_MIRROR=https://mirrors.tuna.tsinghua.edu.cn 覆盖换清华
+DOCKER_MIRROR="${DOCKER_MIRROR:-https://mirrors.aliyun.com}"
 DOCKER_REPO_FILE="/etc/yum.repos.d/docker-ce.repo"
 CONTAINER_SELINUX_URL="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/container-selinux-2.229.0-2.module_el8.10.0+4082+f7f0c95e.noarch.rpm"
 ALMALINUX_REPO="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/"
