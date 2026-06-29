@@ -27,6 +27,8 @@ services:
       - ./initsql:/docker-entrypoint-initdb.d
       # 本仓库 fork 增量,单文件 bind mount,字典序 d- 保证在上游 a-/c- SQL 之后跑(ASCII '0'<'a',原 02- 反而抢跑)
       - ./initsql-extra/d-cfgsync.sql:/docker-entrypoint-initdb.d/d-cfgsync.sql:ro
+      # topo-studio 独立库(字典序 e- 在 d- 之后建);仅 CREATE DATABASE,表由 TOPO_DB_MIGRATE 自动建
+      - ./initsql-extra/e-topo-studio.sql:/docker-entrypoint-initdb.d/e-topo-studio.sql:ro
       - ./etc/mysql/my.cnf:/etc/my.cnf:ro
     networks: [n9e]
     healthcheck:
@@ -195,6 +197,42 @@ services:
     # 注意:明文 HTTP 暴露整个 n9e API(含 Web 登录),建议用防火墙把 17000 限制到 agent 来源 IP。
     ports:
       - "17000:17000"
+
+  topo-studio:
+    # 复用 n9e 镜像里的第二个二进制;覆盖 entrypoint 直接跑 topo-studio。
+    # working_dir 必须是 /app/topo-studio:服务用相对路径加载 web/public 与 migrate SQL。
+    image: docker.1ms.run/fuqiangleon/o9e:${O9E_TAG:-latest}
+    container_name: o9e-topo-studio
+    restart: always
+    working_dir: /app/topo-studio
+    entrypoint: ["/app/topo-studio/bin/topo-studio"]
+    environment:
+      TZ: Asia/Shanghai
+      TOPO_SERVER_HOST: "0.0.0.0"
+      TOPO_SERVER_PORT: "18080"
+      TOPO_API_TOKEN:   ${TOPO_API_TOKEN:-}
+      TOPO_STORE_DRIVER: mysql
+      TOPO_DB_HOST: mysql
+      TOPO_DB_PORT: "3306"
+      TOPO_DB_NAME: topo_studio
+      TOPO_DB_USER: root
+      # init-env.sh 保证 N9E_DB_PASSWORD == MYSQL_ROOT_PASSWORD,故 root 登录可用
+      TOPO_DB_PASS: ${N9E_DB_PASSWORD}
+      TOPO_DB_MIGRATE: "true"
+      SCANOPY_URL: http://scanopy:60072
+      SCANOPY_TOKEN: ${SCANOPY_TOKEN:-}
+    networks: [n9e]
+    depends_on:
+      mysql:   { condition: service_healthy }
+      scanopy: { condition: service_healthy }
+    expose:
+      - "18080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:18080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   nginx:
     image: docker.1ms.run/nginx:1.25-alpine
