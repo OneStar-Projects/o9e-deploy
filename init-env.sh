@@ -8,6 +8,8 @@
 #     用 32 字符 A-Za-z0-9 强随机替换占位符
 #   - etc/tls/{fullchain,privkey}.pem 缺失 → 用宿主 openssl 预签自签证书(CN=N9E_DOMAIN)
 #     原因:nginx 容器内无出网路径,无法 apk 装 openssl 自签,故移到宿主侧做
+#   - 修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl 对 other 可读,跳过 tls 私钥)
+#     原因:容器以非 root uid 读这些文件,而 git checkout/pull 会把 o+r 抹掉
 #
 # 设计约束:
 #   - 默认 initsql 用 N9E_DB_USER=root,所以 MYSQL_ROOT 和 N9E_DB 必须同一个密码
@@ -74,6 +76,15 @@ gen_tls_cert() {
     echo "[init-env] 已生成 etc/tls/{fullchain,privkey}.pem(自签 RSA2048/365 天);生产请换真证书。"
 }
 
+fix_mount_perms() {
+    # 容器以非 root uid 读取 bind 挂载的配置/初始化文件, 需对 other 可读。
+    # git pull / 重新 checkout 会把 o+r 抹掉(git 只记可执行位), 故每次跑都补一遍, 幂等。
+    # 明确跳过 etc/tls: 里面是 nginx 私钥, 不能 world-readable。
+    chmod -R o+rX "${DIR}/initsql" "${DIR}/initsql-extra" 2>/dev/null || true
+    chmod o+r "${DIR}/etc/mysql/my.cnf" "${DIR}/etc/o9e/config.toml.tpl" 2>/dev/null || true
+    echo "[init-env] 已修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl 对 other 可读;tls 私钥不动)"
+}
+
 if [ "${SKIP_ENV}" = 0 ]; then
 MYSQL_ROOT_PWD="$(gen_pwd)"
 N9E_DB_PWD="${MYSQL_ROOT_PWD}"   # initsql 默认 user=root,两个密码必须相同
@@ -115,3 +126,6 @@ fi
 
 # --- TLS 自签证书(容器内无法 apk 装 openssl,故在宿主预生成)---
 gen_tls_cert
+
+# --- 修正 bind 挂载文件权限(容器非 root 读取;checkout/pull 会抹掉 o+r)---
+fix_mount_perms
