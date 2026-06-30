@@ -111,6 +111,15 @@ ORG_ID=$(echo "$LOGIN_RESP" | jq -r '.data.organization_id // empty')
 [ -n "$USER_ID" ] && [ -n "$ORG_ID" ] || { log "FAIL: 没 user_id/org_id"; exit 1; }
 log "登录成功 user_id=$USER_ID org_id=$ORG_ID"
 
+# ============ 4.5 取 org 下所有网络 id(写进 key 的 network_ids)============
+# scanopy 的 API key 即便 permissions=Owner,访问"网络级资源"(topology)仍按 key 自身的
+# network_ids 过滤;不设则 key 看不到任何拓扑 → n9e/topo 取到 0 个 source(「请先选择 source」)。
+# 这里授权 org 下全部现有网络。(之后新增的网络需重跑本脚本刷新。)
+log "GET /api/v1/networks 收集网络 id(用于 key 网络授权)"
+NETWORK_IDS_JSON=$(sc_curl GET "/api/v1/networks?limit=0" | jq -c '[.data[]?.id]')
+case "$NETWORK_IDS_JSON" in ""|null) NETWORK_IDS_JSON='[]' ;; esac
+log "网络 id: $NETWORK_IDS_JSON"
+
 # ============ 5. 看是否已有同名 key,有就 rotate,无则 create ============
 log "GET /api/v1/auth/keys 检查同名 key($KEY_NAME)"
 KEYS_RESP=$(sc_curl GET /api/v1/auth/keys)
@@ -123,13 +132,15 @@ if [ -n "$EXIST_KEY_ID" ]; then
 else
     log "POST /api/v1/auth/keys 创建新 key"
     KEY_BODY=$(jq -nc \
-        --arg n "$KEY_NAME" --arg u "$USER_ID" --arg o "$ORG_ID" \
-        '{name:$n, organization_id:$o, user_id:$u, tags:[], permissions:"Owner"}')
+        --arg n "$KEY_NAME" --arg u "$USER_ID" --arg o "$ORG_ID" --argjson nids "$NETWORK_IDS_JSON" \
+        '{name:$n, organization_id:$o, user_id:$u, tags:[], permissions:"Owner", network_ids:$nids}')
     KEY_RESP=$(sc_curl POST /api/v1/auth/keys "$KEY_BODY")
     KEY_ID=$(echo "$KEY_RESP" | jq -r '.data.api_key.id // empty')
 fi
 
-API_TOKEN=$(echo "$KEY_RESP" | jq -r '.data.key // .data.api_key.key // empty')
+# rotate 返回 {"data":"scp_u_..."}(.data 直接是明文字符串);create 返回 {"data":{"api_key":{"key":...}}}。
+# .data 是字符串就直接用,是对象就取 .key/.api_key.key。(旧写法 .data.key 在 rotate 下 jq 会报错中断。)
+API_TOKEN=$(echo "$KEY_RESP" | jq -r '(.data | if type=="string" then . else (.key // .api_key.key // empty) end) // empty')
 if [ -z "$API_TOKEN" ] || [ "$API_TOKEN" = "null" ] || [ -z "$KEY_ID" ]; then
     log "FAIL: 没拿到 plaintext token 或 key id"
     log "  响应: $(echo "$KEY_RESP" | head -c 400)"
@@ -137,11 +148,13 @@ if [ -z "$API_TOKEN" ] || [ "$API_TOKEN" = "null" ] || [ -z "$KEY_ID" ]; then
 fi
 log "API token OK(scp_u_..., 长度 ${#API_TOKEN})  key_id=$KEY_ID"
 
-# ============ 6. ⚠ 关键:启用 key(刚创建的默认 is_enabled=false)============
-log "PUT /api/v1/auth/keys/$KEY_ID 启用 key(默认 disabled)"
+# ============ 6. ⚠ 关键:启用 key + 授权网络(默认 is_enabled=false 且 network_ids 空)============
+# 此 PUT 对 create 和 rotate 两条路径都跑,所以把 network_ids 一并设进来,
+# 已存在的旧 key(rotate 路径)也会被补上网络授权 → 修好「200 但空拓扑」。
+log "PUT /api/v1/auth/keys/$KEY_ID 启用 key + 授权网络"
 ENABLE_BODY=$(jq -nc \
-    --arg n "$KEY_NAME" --arg u "$USER_ID" --arg o "$ORG_ID" \
-    '{name:$n, organization_id:$o, user_id:$u, tags:[], permissions:"Owner", is_enabled:true}')
+    --arg n "$KEY_NAME" --arg u "$USER_ID" --arg o "$ORG_ID" --argjson nids "$NETWORK_IDS_JSON" \
+    '{name:$n, organization_id:$o, user_id:$u, tags:[], permissions:"Owner", is_enabled:true, network_ids:$nids}')
 ENABLE_RESP=$(sc_curl PUT "/api/v1/auth/keys/$KEY_ID" "$ENABLE_BODY")
 if [ "$(echo "$ENABLE_RESP" | jq -r '.success // false')" != "true" ]; then
     log "FAIL: 启用 key 失败 — 响应: $(echo "$ENABLE_RESP" | head -c 300)"
