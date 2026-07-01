@@ -1,0 +1,769 @@
+{
+  "name": "Docker 容器详情",
+  "ident": "container-docker",
+  "tags": "managed-by-bundle",
+  "note": "bundle-version: 1 | src: integrations/Docker/docker_modern_by_categraf.json",
+  "configs": {
+    "links": [
+      {
+        "targetBlank": true,
+        "title": "文档",
+        "url": "https://github.com/ccfos/nightingale/tree/main/integrations/Docker/markdown/"
+      }
+    ],
+    "var": [
+      {
+        "definition": "prometheus",
+        "name": "datasource",
+        "type": "datasource"
+      },
+      {
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${datasource}"
+        },
+        "definition": "label_values(docker_container_cpu_usage_percent, ident)",
+        "name": "ident",
+        "type": "query",
+        "multi": true,
+        "allOption": true
+      },
+      {
+        "allOption": true,
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${datasource}"
+        },
+        "definition": "label_values(docker_container_cpu_usage_percent{ident=~\"$ident\"}, container_name)",
+        "multi": true,
+        "name": "container",
+        "type": "query"
+      }
+    ],
+    "panels": [
+      {
+        "custom": {
+          "calc": "lastNotNull",
+          "colSpan": 1,
+          "colorMode": "value",
+          "textMode": "valueAndName",
+          "textSize": {
+            "title": 16,
+            "value": 28
+          },
+          "valueField": "Value"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "宿主机上 categraf 探测到的容器数量(基于 cpu 指标 series 数)",
+        "id": "mdn00000-0000-4000-8000-000000000001",
+        "layout": {
+          "h": 4,
+          "i": "mdn00000-0000-4000-8000-000000000001",
+          "isResizable": true,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        },
+        "name": "容器数量",
+        "options": {
+          "standardOptions": {
+            "decimals": 0
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#3D7AC7",
+                "type": "base",
+                "value": null
+              }
+            ]
+          }
+        },
+        "targets": [
+          {
+            "expr": "count(docker_container_cpu_usage_percent{ident=~\"$ident\",cpu=\"cpu-total\"})",
+            "legend": "containers",
+            "refId": "A"
+          }
+        ],
+        "type": "stat",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "calc": "lastNotNull"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "所有容器 CPU 使用率的均值",
+        "id": "mdn00000-0000-4000-8000-000000000002",
+        "layout": {
+          "h": 4,
+          "i": "mdn00000-0000-4000-8000-000000000002",
+          "isResizable": true,
+          "w": 6,
+          "x": 6,
+          "y": 0
+        },
+        "name": "平均 CPU 使用率",
+        "options": {
+          "standardOptions": {
+            "decimals": 2,
+            "max": 100,
+            "min": 0,
+            "util": "percent"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#3DC76E",
+                "type": "base",
+                "value": null
+              },
+              {
+                "color": "#F5A623",
+                "type": "gt",
+                "value": 60
+              },
+              {
+                "color": "#DC4E4E",
+                "type": "gt",
+                "value": 85
+              }
+            ]
+          }
+        },
+        "targets": [
+          {
+            "expr": "avg(docker_container_cpu_usage_percent{ident=~\"$ident\",cpu=\"cpu-total\"})",
+            "legend": "avg cpu",
+            "refId": "A"
+          }
+        ],
+        "type": "gauge",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "calc": "lastNotNull"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "所有容器内存使用率的均值",
+        "id": "mdn00000-0000-4000-8000-000000000003",
+        "layout": {
+          "h": 4,
+          "i": "mdn00000-0000-4000-8000-000000000003",
+          "isResizable": true,
+          "w": 6,
+          "x": 12,
+          "y": 0
+        },
+        "name": "平均内存使用率",
+        "options": {
+          "standardOptions": {
+            "decimals": 2,
+            "max": 100,
+            "min": 0,
+            "util": "percent"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#3DC76E",
+                "type": "base",
+                "value": null
+              },
+              {
+                "color": "#F5A623",
+                "type": "gt",
+                "value": 70
+              },
+              {
+                "color": "#DC4E4E",
+                "type": "gt",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "targets": [
+          {
+            "expr": "avg(docker_container_mem_usage_percent{ident=~\"$ident\"})",
+            "legend": "avg mem",
+            "refId": "A"
+          }
+        ],
+        "type": "gauge",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "calc": "lastNotNull",
+          "colSpan": 1,
+          "colorMode": "value",
+          "textMode": "valueAndName",
+          "textSize": {
+            "title": 16,
+            "value": 28
+          },
+          "valueField": "Value"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "异常容器数 — categraf 编码:0=healthy / 1=starting / 2=unhealthy。仅统计配了 HEALTHCHECK 的容器;0/无数据 = 全部健康或未配 HEALTHCHECK",
+        "id": "mdn00000-0000-4000-8000-000000000004",
+        "layout": {
+          "h": 4,
+          "i": "mdn00000-0000-4000-8000-000000000004",
+          "isResizable": true,
+          "w": 6,
+          "x": 18,
+          "y": 0
+        },
+        "name": "异常健康状态容器数",
+        "options": {
+          "standardOptions": {
+            "decimals": 0
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#3DC76E",
+                "type": "base",
+                "value": null
+              },
+              {
+                "color": "#DC4E4E",
+                "type": "gt",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "targets": [
+          {
+            "expr": "count(docker_container_health_status{ident=~\"$ident\"} == 2) OR on() vector(0)",
+            "legend": "unhealthy",
+            "refId": "A"
+          }
+        ],
+        "type": "stat",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "drawStyle": "lines",
+          "fillOpacity": 0.3,
+          "gradientMode": "opacity",
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "stack": "off"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "Top 10 CPU 使用率最高的容器",
+        "id": "mdn00000-0000-4000-8000-000000000005",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000005",
+          "isResizable": true,
+          "w": 12,
+          "x": 0,
+          "y": 4
+        },
+        "name": "Top 10 CPU 容器",
+        "options": {
+          "legend": {
+            "calcs": [
+              "lastNotNull",
+              "max",
+              "avg"
+            ],
+            "displayMode": "table"
+          },
+          "standardOptions": {
+            "decimals": 2,
+            "util": "percent"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#634CD9",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "tooltip": {
+            "mode": "all",
+            "sort": "desc"
+          }
+        },
+        "targets": [
+          {
+            "expr": "topk(10, docker_container_cpu_usage_percent{ident=~\"$ident\",cpu=\"cpu-total\"})",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "type": "timeseries",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "drawStyle": "lines",
+          "fillOpacity": 0.3,
+          "gradientMode": "opacity",
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "stack": "off"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "Top 10 内存使用率最高的容器",
+        "id": "mdn00000-0000-4000-8000-000000000006",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000006",
+          "isResizable": true,
+          "w": 12,
+          "x": 12,
+          "y": 4
+        },
+        "name": "Top 10 内存容器",
+        "options": {
+          "legend": {
+            "calcs": [
+              "lastNotNull",
+              "max",
+              "avg"
+            ],
+            "displayMode": "table"
+          },
+          "standardOptions": {
+            "decimals": 2,
+            "util": "percent"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#634CD9",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "tooltip": {
+            "mode": "all",
+            "sort": "desc"
+          }
+        },
+        "targets": [
+          {
+            "expr": "topk(10, docker_container_mem_usage_percent{ident=~\"$ident\"})",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "type": "timeseries",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "drawStyle": "lines",
+          "fillOpacity": 0.3,
+          "gradientMode": "opacity",
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "stack": "off"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "容器网络入向 (bps)。network=\"total\" 是所有 veth 聚合,避免和 per-veth series 累加成双倍",
+        "id": "mdn00000-0000-4000-8000-000000000007",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000007",
+          "isResizable": true,
+          "w": 12,
+          "x": 0,
+          "y": 12
+        },
+        "name": "容器网络入流量 RX",
+        "options": {
+          "legend": {
+            "calcs": [
+              "lastNotNull",
+              "max",
+              "avg"
+            ],
+            "displayMode": "table"
+          },
+          "standardOptions": {
+            "decimals": 2,
+            "util": "bitsSecIEC"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#634CD9",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "tooltip": {
+            "mode": "all",
+            "sort": "desc"
+          }
+        },
+        "targets": [
+          {
+            "expr": "rate(docker_container_net_rx_bytes{ident=~\"$ident\",container_name=~\"$container\",network=\"total\"}[5m]) * 8",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "type": "timeseries",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "drawStyle": "lines",
+          "fillOpacity": 0.3,
+          "gradientMode": "opacity",
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "stack": "off"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "容器网络出向 (bps)。network=\"total\" 是所有 veth 聚合",
+        "id": "mdn00000-0000-4000-8000-000000000008",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000008",
+          "isResizable": true,
+          "w": 12,
+          "x": 12,
+          "y": 12
+        },
+        "name": "容器网络出流量 TX",
+        "options": {
+          "legend": {
+            "calcs": [
+              "lastNotNull",
+              "max",
+              "avg"
+            ],
+            "displayMode": "table"
+          },
+          "standardOptions": {
+            "decimals": 2,
+            "util": "bitsSecIEC"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#634CD9",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "tooltip": {
+            "mode": "all",
+            "sort": "desc"
+          }
+        },
+        "targets": [
+          {
+            "expr": "rate(docker_container_net_tx_bytes{ident=~\"$ident\",container_name=~\"$container\",network=\"total\"}[5m]) * 8",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "type": "timeseries",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "drawStyle": "lines",
+          "fillOpacity": 0.3,
+          "gradientMode": "opacity",
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "stack": "off"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "容器 blkio 读吞吐 (sum by container_name 跨设备聚合)",
+        "id": "mdn00000-0000-4000-8000-000000000009",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000009",
+          "isResizable": true,
+          "w": 12,
+          "x": 0,
+          "y": 20
+        },
+        "name": "容器磁盘读取",
+        "options": {
+          "legend": {
+            "calcs": [
+              "lastNotNull",
+              "max",
+              "avg"
+            ],
+            "displayMode": "table"
+          },
+          "standardOptions": {
+            "decimals": 2,
+            "util": "bytesSecIEC"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#634CD9",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "tooltip": {
+            "mode": "all",
+            "sort": "desc"
+          }
+        },
+        "targets": [
+          {
+            "expr": "sum by (container_name) (rate(docker_container_blkio_io_service_bytes_recursive_read{ident=~\"$ident\",container_name=~\"$container\"}[5m]))",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "type": "timeseries",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "drawStyle": "lines",
+          "fillOpacity": 0.3,
+          "gradientMode": "opacity",
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "stack": "off"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "容器 blkio 写吞吐 (sum by container_name 跨设备聚合)",
+        "id": "mdn00000-0000-4000-8000-000000000010",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000010",
+          "isResizable": true,
+          "w": 12,
+          "x": 12,
+          "y": 20
+        },
+        "name": "容器磁盘写入",
+        "options": {
+          "legend": {
+            "calcs": [
+              "lastNotNull",
+              "max",
+              "avg"
+            ],
+            "displayMode": "table"
+          },
+          "standardOptions": {
+            "decimals": 2,
+            "util": "bytesSecIEC"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#634CD9",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "tooltip": {
+            "mode": "all",
+            "sort": "desc"
+          }
+        },
+        "targets": [
+          {
+            "expr": "sum by (container_name) (rate(docker_container_blkio_io_service_bytes_recursive_write{ident=~\"$ident\",container_name=~\"$container\"}[5m]))",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "type": "timeseries",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "calc": "lastNotNull",
+          "colorMode": "value",
+          "displayMode": "seriesToRows",
+          "showHeader": true,
+          "valueField": "Value"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "每行一个容器,Value 是当前内存使用率 (%)",
+        "id": "mdn00000-0000-4000-8000-000000000011",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000011",
+          "isResizable": true,
+          "w": 24,
+          "x": 0,
+          "y": 28
+        },
+        "name": "容器内存明细",
+        "options": {
+          "standardOptions": {
+            "decimals": 2,
+            "util": "percent"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#3D7AC7",
+                "type": "base",
+                "value": null
+              },
+              {
+                "color": "#F5A623",
+                "type": "gt",
+                "value": 80
+              },
+              {
+                "color": "#DC4E4E",
+                "type": "gt",
+                "value": 95
+              }
+            ]
+          }
+        },
+        "targets": [
+          {
+            "expr": "docker_container_mem_usage_percent{ident=~\"$ident\",container_name=~\"$container\"}",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "__name__": true,
+                "engine_host": true,
+                "server_version": true
+              }
+            }
+          }
+        ],
+        "type": "table",
+        "version": "2.0.0"
+      },
+      {
+        "custom": {
+          "calc": "lastNotNull",
+          "colorMode": "value",
+          "displayMode": "seriesToRows",
+          "showHeader": true,
+          "valueField": "Value"
+        },
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${datasource}",
+        "description": "categraf 健康状态语义:0=healthy / 1=starting / 2=unhealthy。无 HEALTHCHECK 配置的容器不发该指标",
+        "id": "mdn00000-0000-4000-8000-000000000012",
+        "layout": {
+          "h": 8,
+          "i": "mdn00000-0000-4000-8000-000000000012",
+          "isResizable": true,
+          "w": 24,
+          "x": 0,
+          "y": 36
+        },
+        "name": "容器健康状态",
+        "options": {
+          "standardOptions": {},
+          "thresholds": {
+            "steps": [
+              {
+                "color": "#3DC76E",
+                "type": "base",
+                "value": null
+              }
+            ]
+          },
+          "valueMappings": [
+            {
+              "match": {
+                "special": 0
+              },
+              "result": {
+                "color": "#3DC76E",
+                "text": "healthy"
+              },
+              "type": "special"
+            },
+            {
+              "match": {
+                "special": 1
+              },
+              "result": {
+                "color": "#F5A623",
+                "text": "starting"
+              },
+              "type": "special"
+            },
+            {
+              "match": {
+                "special": 2
+              },
+              "result": {
+                "color": "#DC4E4E",
+                "text": "unhealthy"
+              },
+              "type": "special"
+            }
+          ]
+        },
+        "targets": [
+          {
+            "expr": "docker_container_health_status{ident=~\"$ident\",container_name=~\"$container\"}",
+            "legend": "{{container_name}}",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true,
+                "__name__": true,
+                "engine_host": true,
+                "server_version": true
+              }
+            }
+          }
+        ],
+        "type": "table",
+        "version": "2.0.0"
+      }
+    ],
+    "version": "3.0.0"
+  }
+}

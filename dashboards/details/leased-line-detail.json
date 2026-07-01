@@ -1,0 +1,465 @@
+{
+  "name": "网络专线详情",
+  "ident": "leased-line-detail",
+  "tags": "managed-by-bundle",
+  "note": "bundle-version: 8 | src: integrations/LeasedLine/dashboards/leased-line.json",
+  "configs": {
+    "panels": [
+      {
+        "id": 1,
+        "name": "通断状态",
+        "type": "stat",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "max(ping_result_code{line=\"$line\"})",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "standardOptions": {},
+          "valueMappings": [
+            {
+              "type": "range",
+              "match": {
+                "to": 0.5
+              },
+              "result": {
+                "text": "通",
+                "color": "rgba(63,196,83,1)"
+              }
+            },
+            {
+              "type": "range",
+              "match": {
+                "from": 0.5
+              },
+              "result": {
+                "text": "断",
+                "color": "rgba(250,6,6,1)"
+              }
+            }
+          ],
+          "colorMode": "background",
+          "textMode": "valueAndName",
+          "calc": "lastNotNull"
+        },
+        "custom": {
+          "textMode": "valueAndName",
+          "colorMode": "background",
+          "calc": "lastNotNull"
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 0,
+          "i": "1",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 2,
+        "name": "当前丢包率%",
+        "type": "stat",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "max(ping_percent_packet_loss{line=\"$line\"})",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "standardOptions": {},
+          "valueMappings": [],
+          "colorMode": "background",
+          "textMode": "valueAndName",
+          "calc": "lastNotNull"
+        },
+        "custom": {
+          "textMode": "valueAndName",
+          "colorMode": "background",
+          "calc": "lastNotNull"
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 4,
+          "w": 6,
+          "x": 6,
+          "y": 0,
+          "i": "2",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 3,
+        "name": "接口状态",
+        "type": "stat",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "max(snmp_interface_ifOperStatus{LocalIP=\"$device\",ifDescr=\"$ifname\"}) or max(snmp_interface_ifOperStatus{LocalIP=\"$device\",index=\"$ifindex\"})",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "standardOptions": {},
+          "valueMappings": [
+            {
+              "type": "range",
+              "match": {
+                "to": 1.5
+              },
+              "result": {
+                "text": "UP",
+                "color": "rgba(63,196,83,1)"
+              }
+            },
+            {
+              "type": "range",
+              "match": {
+                "from": 1.5
+              },
+              "result": {
+                "text": "DOWN",
+                "color": "rgba(250,6,6,1)"
+              }
+            }
+          ],
+          "colorMode": "background",
+          "textMode": "valueAndName",
+          "calc": "lastNotNull"
+        },
+        "custom": {
+          "textMode": "valueAndName",
+          "colorMode": "background",
+          "calc": "lastNotNull"
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 4,
+          "w": 6,
+          "x": 12,
+          "y": 0,
+          "i": "3",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 4,
+        "name": "当前RTT(ms)",
+        "type": "stat",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "max(ping_average_response_ms{line=\"$line\"})",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "standardOptions": {},
+          "valueMappings": [],
+          "colorMode": "background",
+          "textMode": "valueAndName",
+          "calc": "lastNotNull"
+        },
+        "custom": {
+          "textMode": "valueAndName",
+          "colorMode": "background",
+          "calc": "lastNotNull"
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 4,
+          "w": 6,
+          "x": 18,
+          "y": 0,
+          "i": "4",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 5,
+        "name": "时延 RTT (ms)",
+        "type": "timeseries",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "max(ping_average_response_ms{line=\"$line\"})",
+            "legend": "avg",
+            "refId": "A"
+          },
+          {
+            "expr": "max(ping_maximum_response_ms{line=\"$line\"})",
+            "legend": "max",
+            "refId": "B"
+          },
+          {
+            "expr": "max(ping_minimum_response_ms{line=\"$line\"})",
+            "legend": "min",
+            "refId": "C"
+          }
+        ],
+        "options": {
+          "standardOptions": {
+            "util": "none"
+          },
+          "valueMappings": [],
+          "legend": {
+            "displayMode": "table",
+            "columns": [
+              "last"
+            ]
+          }
+        },
+        "custom": {
+          "drawStyle": "lines",
+          "lineInterpolation": "smooth",
+          "fillOpacity": 0.1
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 7,
+          "w": 12,
+          "x": 0,
+          "y": 4,
+          "i": "5",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 6,
+        "name": "丢包率 %",
+        "type": "timeseries",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "max(ping_percent_packet_loss{line=\"$line\"})",
+            "legend": "loss%",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "standardOptions": {
+            "util": "percent"
+          },
+          "valueMappings": [],
+          "legend": {
+            "displayMode": "table",
+            "columns": [
+              "avg",
+              "max",
+              "last"
+            ]
+          }
+        },
+        "custom": {
+          "drawStyle": "lines",
+          "lineInterpolation": "smooth",
+          "fillOpacity": 0.1
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 7,
+          "w": 12,
+          "x": 12,
+          "y": 4,
+          "i": "6",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 7,
+        "name": "带宽利用率 in/out %(填了接口名或索引才有)",
+        "type": "timeseries",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "rate(snmp_interface_ifInOctets{LocalIP=\"$device\",ifName=\"$ifname\"}[5m])*8 / (snmp_interface_ifHighSpeed{LocalIP=\"$device\",ifName=\"$ifname\"}*1e6) *100",
+            "legend": "in(name)",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(snmp_interface_ifInOctets{LocalIP=\"$device\",index=\"$ifindex\"}[5m])*8 / (snmp_interface_ifHighSpeed{LocalIP=\"$device\",index=\"$ifindex\"}*1e6) *100",
+            "legend": "in(idx)",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(snmp_interface_ifOutOctets{LocalIP=\"$device\",ifName=\"$ifname\"}[5m])*8 / (snmp_interface_ifHighSpeed{LocalIP=\"$device\",ifName=\"$ifname\"}*1e6) *100",
+            "legend": "out(name)",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(snmp_interface_ifOutOctets{LocalIP=\"$device\",index=\"$ifindex\"}[5m])*8 / (snmp_interface_ifHighSpeed{LocalIP=\"$device\",index=\"$ifindex\"}*1e6) *100",
+            "legend": "out(idx)",
+            "refId": "B"
+          }
+        ],
+        "options": {
+          "standardOptions": {
+            "util": "percent"
+          },
+          "valueMappings": [],
+          "legend": {
+            "displayMode": "table",
+            "columns": [
+              "avg",
+              "max",
+              "last"
+            ]
+          }
+        },
+        "custom": {
+          "drawStyle": "lines",
+          "lineInterpolation": "smooth",
+          "fillOpacity": 0.1
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 7,
+          "w": 12,
+          "x": 0,
+          "y": 11,
+          "i": "7",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      },
+      {
+        "id": 8,
+        "name": "流量 in/out (bps)",
+        "type": "timeseries",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "rate(snmp_interface_ifInOctets{LocalIP=\"$device\",ifName=\"$ifname\"}[5m])*8",
+            "legend": "in(name)",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(snmp_interface_ifInOctets{LocalIP=\"$device\",index=\"$ifindex\"}[5m])*8",
+            "legend": "in(idx)",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(snmp_interface_ifOutOctets{LocalIP=\"$device\",ifName=\"$ifname\"}[5m])*8",
+            "legend": "out(name)",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(snmp_interface_ifOutOctets{LocalIP=\"$device\",index=\"$ifindex\"}[5m])*8",
+            "legend": "out(idx)",
+            "refId": "B"
+          }
+        ],
+        "options": {
+          "standardOptions": {
+            "util": "bitsSI"
+          },
+          "valueMappings": [],
+          "legend": {
+            "displayMode": "table",
+            "columns": [
+              "avg",
+              "max",
+              "last"
+            ]
+          }
+        },
+        "custom": {
+          "drawStyle": "lines",
+          "lineInterpolation": "smooth",
+          "fillOpacity": 0.1
+        },
+        "overrides": [
+          {}
+        ],
+        "layout": {
+          "h": 7,
+          "w": 12,
+          "x": 12,
+          "y": 11,
+          "i": "8",
+          "isResizable": true
+        },
+        "version": "3.0.0"
+      }
+    ],
+    "var": [
+      {
+        "definition": "prometheus",
+        "name": "prom",
+        "type": "datasource"
+      },
+      {
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${prom}"
+        },
+        "definition": "label_values(ping_result_code, line)",
+        "name": "line",
+        "type": "query"
+      },
+      {
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${prom}"
+        },
+        "definition": "label_values(ping_result_code{line=\"$line\"}, device)",
+        "name": "device",
+        "type": "query",
+        "hide": true
+      },
+      {
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${prom}"
+        },
+        "definition": "label_values(ping_result_code{line=\"$line\"}, ifname)",
+        "name": "ifname",
+        "type": "query",
+        "hide": true
+      },
+      {
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${prom}"
+        },
+        "definition": "label_values(ping_result_code{line=\"$line\"}, ifindex)",
+        "name": "ifindex",
+        "type": "query",
+        "hide": true
+      }
+    ],
+    "version": "3.0.0"
+  }
+}

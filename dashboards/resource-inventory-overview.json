@@ -1,0 +1,1194 @@
+{
+  "name": "资源清单(总览)",
+  "tags": "资源清单 inventory 主机 网络设备 应用 数据库 中间件 容器 总览 managed-by-bundle",
+  "ident": "resource-overview",
+  "configs": {
+    "version": "3.0.0",
+    "links": [],
+    "var": [],
+    "panels": [
+      {
+        "type": "row",
+        "id": "row-overview",
+        "name": "总览",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 0,
+          "i": "row-overview",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-host",
+        "layout": {
+          "h": 3,
+          "w": 4,
+          "x": 0,
+          "y": 1,
+          "i": "stat-host",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "count(mem_available_percent)",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "主机",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(58, 128, 233, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-net-snmp",
+        "layout": {
+          "h": 3,
+          "w": 2,
+          "x": 4,
+          "y": 1,
+          "i": "stat-net-snmp",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "sum(snmp_up)",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "网络·SNMP",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(124, 77, 255, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-net-icmp",
+        "layout": {
+          "h": 3,
+          "w": 2,
+          "x": 6,
+          "y": 1,
+          "i": "stat-net-icmp",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "sum(snmp_icmp_up)",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "网络·ICMP",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(149, 117, 205, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-app",
+        "layout": {
+          "h": 3,
+          "w": 4,
+          "x": 8,
+          "y": 1,
+          "i": "stat-app",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "count(up{source!=\"beyla\"})",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "应用",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(0, 188, 212, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-db",
+        "layout": {
+          "h": 3,
+          "w": 4,
+          "x": 12,
+          "y": 1,
+          "i": "stat-db",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "count({__name__=~\"mysql_up|oracle_up|postgresql_up|redis_up|sqlserver_up\"})",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "数据库",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(255, 152, 0, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-mw",
+        "layout": {
+          "h": 3,
+          "w": 4,
+          "x": 16,
+          "y": 1,
+          "i": "stat-mw",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "count({__name__=~\"elasticsearch_up|tomcat_up|consul_up|jenkins_up|keepalived_up\"})",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "中间件/服务",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(63, 196, 83, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "stat",
+        "id": "stat-ctn",
+        "layout": {
+          "h": 3,
+          "w": 4,
+          "x": 20,
+          "y": 1,
+          "i": "stat-ctn",
+          "isResizable": true
+        },
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 1,
+        "targets": [
+          {
+            "expr": "count({__name__=~\"docker_up|cadvisor_up\"})",
+            "legend": "",
+            "instant": false,
+            "maxDataPoints": 240,
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {}
+          }
+        ],
+        "name": "容器",
+        "maxPerRow": 6,
+        "custom": {
+          "textMode": "valueAndName",
+          "graphMode": "none",
+          "colorMode": "background",
+          "calc": "lastNotNull",
+          "valueField": "Value",
+          "colSpan": 0,
+          "textSize": {},
+          "orientation": "vertical"
+        },
+        "options": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "rgba(233, 30, 99, 1)",
+                "value": null,
+                "type": "base"
+              }
+            ]
+          },
+          "standardOptions": {}
+        }
+      },
+      {
+        "type": "row",
+        "id": "row-host",
+        "name": "主机",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 4,
+          "i": "row-host",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "table",
+        "id": "tbl-host",
+        "name": "主机清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 5,
+          "i": "tbl-host",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "mem_available_percent",
+            "legend": "状态",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "ident"
+          ],
+          "sortColumn": "ident",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/host-detail?ident=${__field.labels.ident}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "ident": "主机",
+                "A": "状态"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      },
+      {
+        "type": "row",
+        "id": "row-net",
+        "name": "网络设备",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 13,
+          "i": "row-net",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "table",
+        "id": "tbl-net",
+        "name": "网络设备清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 14,
+          "i": "tbl-net",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "snmp_up",
+            "legend": "状态",
+            "instant": false,
+            "maxDataPoints": 240
+          },
+          {
+            "refId": "B",
+            "expr": "snmp_icmp_up",
+            "legend": "ICMP状态",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "LocalIP",
+            "BU"
+          ],
+          "sortColumn": "LocalIP",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/net-detail?ipadd=${__field.labels.LocalIP}&jieru=1&sys_name=all",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "B"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "BU": "业务部",
+                "A": "SNMP状态",
+                "B": "ICMP状态",
+                "LocalIP": "设备IP"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      },
+      {
+        "type": "row",
+        "id": "row-app",
+        "name": "应用",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 22,
+          "i": "row-app",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "table",
+        "id": "tbl-app",
+        "name": "应用清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 23,
+          "i": "tbl-app",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "up{source!=\"beyla\"}",
+            "legend": "状态",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "job",
+            "instance",
+            "ident"
+          ],
+          "sortColumn": "job",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/app-detail?instance=${__field.labels.instance}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "job": "应用",
+                "instance": "实例",
+                "A": "状态",
+                "ident": "ident"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      },
+      {
+        "type": "row",
+        "id": "row-db",
+        "name": "数据库",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 31,
+          "i": "row-db",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "table",
+        "id": "tbl-db",
+        "name": "数据库清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 32,
+          "i": "tbl-db",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "label_replace({__name__=~\"mysql_up|oracle_up|postgresql_up|redis_up|sqlserver_up\"}, \"dbtype\", \"$1\", \"__name__\", \"(.+)_up\")",
+            "legend": "状态",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "dbtype",
+            "instance"
+          ],
+          "sortColumn": "dbtype",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/db-${__field.labels.dbtype}?instance=${__field.labels.instance}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "instance": "实例",
+                "A": "状态",
+                "dbtype": "类型"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      },
+      {
+        "type": "row",
+        "id": "row-mw",
+        "name": "中间件/服务",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 40,
+          "i": "row-mw",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "table",
+        "id": "tbl-mw",
+        "name": "中间件/服务清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 41,
+          "i": "tbl-mw",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "label_replace({__name__=~\"elasticsearch_up|tomcat_up|consul_up|jenkins_up|keepalived_up\"}, \"svctype\", \"$1\", \"__name__\", \"(.+)_up\")",
+            "legend": "状态",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "svctype",
+            "instance"
+          ],
+          "sortColumn": "svctype",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/mw-${__field.labels.svctype}?instance=${__field.labels.instance}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "instance": "实例",
+                "A": "状态",
+                "svctype": "类型"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      },
+      {
+        "type": "row",
+        "id": "row-ct",
+        "name": "容器",
+        "collapsed": false,
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 49,
+          "i": "row-ct",
+          "isResizable": false
+        }
+      },
+      {
+        "type": "table",
+        "id": "tbl-ct",
+        "name": "容器/编排清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 50,
+          "i": "tbl-ct",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "label_replace({__name__=~\"docker_up|cadvisor_up\"}, \"ctype\", \"$1\", \"__name__\", \"(.+)_up\")",
+            "legend": "状态",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "ctype",
+            "ident"
+          ],
+          "sortColumn": "ctype",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/container-${__field.labels.ctype}?ident=${__field.labels.ident}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "在线",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "离线",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "A": "状态",
+                "ctype": "类型",
+                "ident": "主机"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      },
+      {
+        "type": "row",
+        "id": "row-leasedline",
+        "name": "网络专线",
+        "layout": {
+          "h": 1,
+          "w": 24,
+          "x": 0,
+          "y": 58,
+          "i": "row-leasedline",
+          "isResizable": false
+        },
+        "collapsed": false
+      },
+      {
+        "type": "table",
+        "id": "tbl-leasedline",
+        "name": "网络专线清单",
+        "version": "3.0.0",
+        "datasourceCate": "prometheus",
+        "datasourceValue": 0,
+        "layout": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 59,
+          "i": "tbl-leasedline",
+          "isResizable": true
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "ping_result_code",
+            "legend": "通断",
+            "instant": false,
+            "maxDataPoints": 240
+          }
+        ],
+        "custom": {
+          "showHeader": true,
+          "calc": "lastNotNull",
+          "colorMode": "background",
+          "displayMode": "labelValuesToRows",
+          "aggrDimension": [
+            "line",
+            "local",
+            "peer"
+          ],
+          "sortColumn": "line",
+          "sortOrder": "ascend",
+          "linkMode": "appendLinkColumn",
+          "links": [
+            {
+              "title": "详情",
+              "url": "/dashboards/leased-line-detail?line=${__field.labels.line}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "options": {
+          "standardOptions": {}
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "value": "A"
+            },
+            "properties": {
+              "valueMappings": [
+                {
+                  "type": "range",
+                  "match": {
+                    "to": 0.5
+                  },
+                  "result": {
+                    "text": "通",
+                    "color": "rgba(63,196,83,1)"
+                  }
+                },
+                {
+                  "type": "range",
+                  "match": {
+                    "from": 0.5
+                  },
+                  "result": {
+                    "text": "断",
+                    "color": "rgba(250,6,6,1)"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "BU": "业务部",
+                "A": "SNMP状态",
+                "B": "ICMP状态",
+                "LocalIP": "设备IP"
+              }
+            }
+          }
+        ],
+        "maxPerRow": 4
+      }
+    ]
+  },
+  "note": "bundle-version: 3"
+}

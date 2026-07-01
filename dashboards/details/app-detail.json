@@ -1,0 +1,83 @@
+{
+  "name": "应用详情(采集健康)",
+  "ident": "app-detail",
+  "tags": "managed-by-bundle",
+  "note": "bundle-version: 1 | src: builtin generic up/scrape",
+  "configs": {
+    "version": "3.0.0",
+    "var": [
+      {
+        "name": "prom",
+        "type": "datasource",
+        "definition": "prometheus",
+        "label": "数据源"
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": {
+          "cate": "prometheus",
+          "value": "${prom}"
+        },
+        "definition": "label_values(up,instance)",
+        "label": "实例",
+        "multi": false,
+        "allOption": false
+      }
+    ],
+    "panels": [
+      {
+        "type": "stat",
+        "name": "采集状态(up)",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "up{instance=\"$instance\"}",
+            "instant": true
+          }
+        ],
+        "layout": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "type": "timeseries",
+        "name": "抓取时延 scrape_duration_seconds",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "scrape_duration_seconds{instance=\"$instance\"}"
+          }
+        ],
+        "layout": {
+          "h": 7,
+          "w": 12,
+          "x": 0,
+          "y": 4
+        }
+      },
+      {
+        "type": "timeseries",
+        "name": "样本数 scrape_samples_scraped",
+        "datasourceCate": "prometheus",
+        "datasourceValue": "${prom}",
+        "targets": [
+          {
+            "expr": "scrape_samples_scraped{instance=\"$instance\"}"
+          }
+        ],
+        "layout": {
+          "h": 7,
+          "w": 12,
+          "x": 12,
+          "y": 4
+        }
+      }
+    ]
+  }
+}
