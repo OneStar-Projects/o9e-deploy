@@ -1,0 +1,5 @@
+# Logstash 主配置(o9e 日志监控)
+# pipeline 在 /usr/share/logstash/pipeline(compose bind mount)
+http.host: "0.0.0.0"
+# 关内建 monitoring(不往 ES 写自监控数据,省资源)
+xpack.monitoring.enabled: false

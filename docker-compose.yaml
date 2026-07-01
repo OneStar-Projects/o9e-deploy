@@ -11,6 +11,7 @@ volumes:
   n9e-logs:
   scanopy-postgres-data:
   scanopy-daemon-config:
+  es-data:
 
 services:
   mysql:
@@ -241,6 +242,64 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+
+  # ─── 日志监控:Logstash 收 nprobe NetFlow → Elasticsearch,n9e 日志探索查 ───
+  # 镜像走 docker.elastic.co(1ms 不代理),本机需经代理拉。
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ES_VERSION:-8.15.3}
+    container_name: o9e-elasticsearch
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      discovery.type: single-node
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      # 单机内网部署:安全开启(basic auth)但关 HTTP/transport TLS,简化对接
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      bootstrap.memory_lock: "true"
+      # heap 按宿主内存调,建议 ≤ 物理内存一半
+      ES_JAVA_OPTS: -Xms${ES_HEAP_SIZE:-2g} -Xmx${ES_HEAP_SIZE:-2g}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks: [n9e]
+    expose:
+      - "9200"
+    healthcheck:
+      # ES 首启慢(初始化 + security bootstrap),start_period 给足
+      test: ["CMD-SHELL", "curl -sf -u elastic:${ELASTIC_PASSWORD} 'http://localhost:9200/_cluster/health' | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${ES_VERSION:-8.15.3}
+    container_name: o9e-logstash
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      LS_JAVA_OPTS: -Xms${LS_HEAP_SIZE:-1g} -Xmx${LS_HEAP_SIZE:-1g}
+      # pipeline 的 elasticsearch output 引用它做 basic auth
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      xpack.monitoring.enabled: "false"
+    volumes:
+      - ./etc/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./etc/logstash/pipeline:/usr/share/logstash/pipeline:ro
+    networks: [n9e]
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+    # NetFlow 入口:远端 agent 的 nprobe 送到 <部署机IP>:5044(NPROBE_COLLECTOR)
+    ports:
+      - "${NETFLOW_PORT:-5044}:5044/udp"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600 >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
 
   nginx:
     image: docker.1ms.run/nginx:1.25-alpine

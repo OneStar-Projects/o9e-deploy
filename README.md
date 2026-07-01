@@ -4,7 +4,7 @@
 现场只需 `git clone` 本仓库,镜像从 Docker Hub 拉取(`fuqiangleon/o9e`),
 **不需要源码、不在现场编译**。后续更新一条 `git pull` 即可。
 
-7 类服务、共 9 个容器:`mysql / redis / victoriametrics / scanopy(3 容器)/ topo-studio / n9e / nginx`。
+8 类服务、共 11 个容器:`mysql / redis / victoriametrics / scanopy(3 容器)/ topo-studio / elasticsearch / logstash / n9e / nginx`。
 被监控主机的 `categraf` agent **不在 compose 内**,走 n9e 后台的
 "配置中心 → 装机令牌(EnrollToken)" 装机。
 
@@ -17,8 +17,11 @@
 - Docker 24+,docker compose v2
   - 银河麒麟 V10 (x86_64) 空机器可一键装:`sudo ./install-docker-kylin.sh`
     (装 Docker CE 26.1.2 + compose 插件 + 国内镜像加速,详见脚本头部说明)
-- 宿主可用内存 ≥ 4 GB,磁盘 ≥ 20 GB
+- 宿主可用内存 **≥ 8 GB**(含 ES+Logstash 的 JVM heap;不装日志监控可 ≥4 GB),磁盘 ≥ 20 GB
 - 能访问 Docker Hub(或配好镜像加速)拉 `fuqiangleon/o9e` 及中间件镜像
+- **日志监控(ES/Logstash)额外要求**:
+  - 宿主内核 `vm.max_map_count ≥ 262144`(ES 硬性要求;`init-env.sh` 会尝试自动设,免密 sudo 不可用时按它打印的命令手动设)
+  - 能拉 `docker.elastic.co` 的 ES/Logstash 镜像(1ms 不代理该源,经代理出网的机器需 gost 能到 docker.elastic.co)
 
 ## 首次部署
 
@@ -116,6 +119,8 @@ Redis 是缓存 + cfgsync 临时态,可不备份。
 | 8428 | ✗ | victoriametrics | 内部 |
 | 3306 | ✗ | mysql | 内部 |
 | 6379 | ✗ | redis | 内部 |
+| 5044/udp | ✓ | logstash | **NetFlow 入口**;远端 agent 的 nprobe 送到此(`NETFLOW_PORT` 可改) |
+| 9200 | ✗ | elasticsearch | 内部(n9e/logstash 走 docker 网络访问) |
 
 ## 给被监控主机装 categraf
 
@@ -128,6 +133,33 @@ curl -fsSL https://${N9E_DOMAIN}/api/n9e/agent-install/categraf.sh \
 ```
 
 脚本会:下载 categraf 二进制 → 注册 systemd → 上报 host_state 到 n9e → 建立 binding。
+
+## 日志监控(Elasticsearch + Logstash)
+
+链路:**agent 的 `nprobe`(NetFlow)→ 部署机 `logstash:5044/udp` → `elasticsearch` → n9e「日志探索」查 `netflow-*`**。
+
+镜像走 `docker.elastic.co`(1ms 不代理),版本由 `.env` 的 `ES_VERSION` 控制;heap 由 `ES_HEAP_SIZE`/`LS_HEAP_SIZE` 控制。`ELASTIC_PASSWORD` 由 `init-env.sh` 生成。
+
+**1. 部署侧**:`init-env.sh` + `docker compose up -d` 会自动带起 elasticsearch/logstash(前提:`vm.max_map_count≥262144`、gost 能到 docker.elastic.co)。单验证:
+```bash
+docker compose up -d elasticsearch logstash
+docker compose ps                    # 两者 healthy
+docker exec o9e-elasticsearch curl -s -u elastic:"$ELASTIC_PASSWORD" localhost:9200/_cluster/health
+```
+
+**2. agent 侧开 NetFlow**:装机 answers 里设(见 monorepo `agents/n9e-agents`):
+```
+NPROBE_ENABLE=true
+NPROBE_INTERFACE=<采集网卡,如 enp2s0>
+NPROBE_COLLECTOR=<部署机IP>:5044     # 指向本部署机 logstash 的 NetFlow 入口
+```
+
+**3. n9e 加 ES 数据源**(手动,一次性):登录后台 → **数据源管理 → 新增 Elasticsearch**:
+- 地址 `http://elasticsearch:9200`(n9e 与 ES 同 docker 网络,用服务名)
+- 账号 `elastic` / 密码 = `.env` 的 `ELASTIC_PASSWORD`
+- 之后「日志探索」选该数据源 + 索引 `netflow-*` 即可查流量日志。
+
+> 只收 NetFlow。要接主机/应用日志(syslog/filebeat),在 `etc/logstash/pipeline/` 再加 input/pipeline。
 
 ## 故障排查
 
@@ -154,15 +186,16 @@ docker compose down -v
 ~~~
 o9e-deploy/
 ├── install-docker-kylin.sh      # 麒麟 V10 空机器一键装 Docker(装机前置)
-├── init-env.sh                  # 生成 .env(强随机密码 + TOPO_API_TOKEN)+ 预签 TLS 证书 + 修正挂载权限
+├── init-env.sh                  # 生成 .env(强随机密码 + TOPO_API_TOKEN + ELASTIC_PASSWORD)+ 预签 TLS 证书 + 修正挂载权限 + 设 vm.max_map_count
 ├── scanopy-bootstrap.sh         # 部署后 setup scanopy + 写回 SCANOPY_TOKEN + 重建 n9e/topo-studio
 ├── scanopy-lock-registration.sh # 锁定 scanopy 注册
-├── docker-compose.yaml          # 9 容器编排(n9e/topo-studio 走 fuqiangleon/o9e,纯 pull)
+├── docker-compose.yaml          # 11 容器编排(n9e/topo-studio 走 fuqiangleon/o9e;ES/Logstash 走 docker.elastic.co;纯 pull)
 ├── .env.example
 ├── etc/
 │   ├── o9e/config.toml.tpl      # n9e 配置模板(entrypoint envsubst 渲染)
 │   ├── nginx/{nginx.conf, conf.d/n9e.conf, auto-cert.sh}
 │   ├── mysql/my.cnf
+│   ├── logstash/{config/logstash.yml, pipeline/netflow.conf}  # NetFlow → ES 管道
 │   └── tls/                     ← 真证书放这;留空则 init-env.sh 预签自签证书(容器内无法联网装 openssl 自签)
 ├── initsql/                     ← 上游 schema 真目录(自包含)
 └── initsql-extra/               ← fork 的增量 SQL
