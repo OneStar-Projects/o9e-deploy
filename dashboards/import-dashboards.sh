@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # 资源清单套件导入/升级脚本。依赖: curl jq。
-# 用法: N9E_ADDR=http://localhost:17000 N9E_USER=root N9E_PASS=xxx ./import-dashboards.sh
+# 用法: N9E_ADDR=http://localhost:17000 N9E_USER=root N9E_PASS=<登录密码> ./import-dashboards.sh
+#   N9E_PASS 必填,不内置默认口令(避免把默认密码硬编码进仓库)。
 set -euo pipefail
 
 ADDR="${N9E_ADDR:-http://localhost:17000}"
 USER="${N9E_USER:-root}"
-PASS="${N9E_PASS:-root.2020}"
+PASS="${N9E_PASS:?必填:请显式传 N9E_PASS=<n9e 登录密码>(本脚本不内置默认口令)}"
 VM_URL="${VM_URL:-http://victoriametrics:8428/}"
 # 可见性: login(默认,所有登录用户可见) | anonymous(匿名免登录) | private(仅业务组成员/admin) | busi(授权给本业务组)
 BUNDLE_VISIBILITY="${BUNDLE_VISIBILITY:-login}"
