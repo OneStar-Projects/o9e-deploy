@@ -230,6 +230,10 @@ services:
       TOPO_DB_MIGRATE: "true"
       SCANOPY_URL: http://scanopy:60072
       SCANOPY_TOKEN: ${SCANOPY_TOKEN:-}
+      # 嵌入全应用(organizations/SSE 需 user context)用的服务用户会话凭据。
+      # 复用 bootstrap 已配的 admin 账号,无需另加密钥。
+      SCANOPY_SESSION_EMAIL:    ${SCANOPY_ADMIN_EMAIL:-}
+      SCANOPY_SESSION_PASSWORD: ${SCANOPY_ADMIN_PASSWORD:-}
     networks: [n9e]
     depends_on:
       mysql:   { condition: service_healthy }
