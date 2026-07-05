@@ -71,22 +71,36 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
-# ============ 2. setup(组织 + 默认网络)============
+# ============ 2+3. setup + register(⚠️ 必须共享同一 session)============
+# scanopy onboarding 设计:/setup 只把 org/network 暂存进【会话】(不落库);/register 从
+# 【同一会话】读 pending_setup 才能建 org。两步不共享 cookie → register 报
+# "Organization setup information missing",账号+org 都建不出来(旧脚本 setup 与 register
+# 各自无 cookie → 断会话,故一直无法自动初始化)。
+# 用 -i 抓 /setup 的 Set-Cookie: session_id(与下方 login 步同套路 —— 0.16.2+ 的 session
+# cookie 带 Secure,curl 明文不回传,只能手动提取),赋给 SESSION_ID 让 register 复用。
+# 幂等:重跑时 register 先查 email 唯一性再建 org(scanopy service.rs),email 已存在则直接
+# 报错返回、不产生孤儿 org,脚本继续走 login。
 log "POST /api/auth/setup(org=$SCANOPY_ORG_NAME, network=$SCANOPY_NETWORK_NAME)"
 SETUP_BODY=$(jq -nc --arg o "$SCANOPY_ORG_NAME" --arg n "$SCANOPY_NETWORK_NAME" \
     '{organization_name:$o, network:{name:$n, snmp_enabled:false}}')
-sc_curl POST /api/auth/setup "$SETUP_BODY" >/dev/null || true   # 已 setup 过会失败,无所谓
+SETUP_RAW=$(docker compose exec -T n9e curl -sS -i -X POST \
+    -H 'Content-Type: application/json' --max-time 10 \
+    -d "$SETUP_BODY" "${SCANOPY_HOST}/api/auth/setup" || true)
+SESSION_ID=$(printf '%s' "$SETUP_RAW" | tr -d '\r' \
+    | sed -n 's/^[Ss]et-[Cc]ookie: *session_id=\([^;]*\).*/\1/p' | head -1)
+[ -n "$SESSION_ID" ] || log "警告: /setup 未返回 session_id(可能已 setup 过)"
 
-# ============ 3. register(admin 账号,idempotent)============
-log "POST /api/auth/register email=$SCANOPY_ADMIN_EMAIL"
+log "POST /api/auth/register email=$SCANOPY_ADMIN_EMAIL(复用 setup 会话)"
 REG_BODY=$(jq -nc --arg e "$SCANOPY_ADMIN_EMAIL" --arg p "$SCANOPY_ADMIN_PASSWORD" \
     '{email:$e, password:$p, terms_accepted:true, marketing_opt_in:false}')
 REG_RESP=$(sc_curl POST /api/auth/register "$REG_BODY" || echo '{}')
 if [ "$(echo "$REG_RESP" | jq -r '.success // false')" = "true" ]; then
-    log "注册成功"
+    log "注册成功(账号 + org 已建)"
 else
-    log "注册失败(可能账号已存在,继续 login)"
+    log "注册未成功: $(echo "$REG_RESP" | jq -r '.error // "unknown"')(账号已存在则正常,继续 login)"
 fi
+# 清掉 setup 会话:下一步 login 会提取真正的登录会话覆盖它
+SESSION_ID=""
 
 # ============ 4. login(提取 session_id + user/org id)============
 log "POST /api/auth/login"
