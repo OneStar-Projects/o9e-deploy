@@ -159,6 +159,13 @@ NPROBE_COLLECTOR=<部署机IP>:5044     # 指向本部署机 logstash 的 NetFlo
 - 账号 `elastic` / 密码 = `.env` 的 `ELASTIC_PASSWORD`
 - 之后「日志探索」选该数据源 + 索引 `netflow-*` 即可查流量日志。
 
+**4. 日志保留策略**(手动,一次性;不做则 ES 磁盘会被日志无限撑满):
+```bash
+./es-ilm-bootstrap.sh              # 默认保留 15 天,超期自动删
+RETENTION_DAYS=30 ./es-ilm-bootstrap.sh   # 改保留天数重跑即可(幂等)
+```
+> 给 `netflow-*` 装 ILM 策略 + index template。前置:elasticsearch 已 healthy。
+
 > 只收 NetFlow。要接主机/应用日志(syslog/filebeat),在 `etc/logstash/pipeline/` 再加 input/pipeline。
 
 ## 故障排查
