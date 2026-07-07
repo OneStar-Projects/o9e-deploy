@@ -79,13 +79,16 @@ services:
       retries: 5
       start_period: 15s
 
-  # ─── scanopy 官方 3 服务套餐(网络拓扑发现)──────────────────
-  # 上游 docker-compose:https://github.com/scanopy/scanopy/blob/main/docker-compose.yml
+  # ─── scanopy 服务(网络拓扑发现,fork 版)──────────────────
+  # 镜像来自 fork(fuqiangleon/scanopy),由该仓库的 build-images.sh 构建并推 Docker Hub
+  #   (含延庆 SNMP 存活兜底改动;server 内含 scanopy 原生 UI)。经 docker.1ms.run 加速拉。
+  # 结构对齐上游 docker-compose:https://github.com/scanopy/scanopy/blob/main/docker-compose.yml
   # n9e 通过 /api/scanopy/* 反代到下面的 scanopy 容器(就是上游的 "server")。
   # daemon 必须 host network + privileged 才能扫描真实网络。
+  # 更新镜像:改 .env 的 SCANOPY_TAG(默认 latest)→ docker compose pull scanopy scanopy-daemon && up -d。
 
   scanopy-daemon:
-    image: ghcr.1ms.run/scanopy/scanopy/daemon:latest
+    image: docker.1ms.run/fuqiangleon/scanopy-daemon:${SCANOPY_TAG:-latest}
     container_name: o9e-scanopy-daemon
     network_mode: host                       # 扫描需要直接看到宿主网卡
     privileged: true                          # daemon 要发起 raw socket / ARP
@@ -125,7 +128,7 @@ services:
   scanopy:
     # 上游叫 "server",这里保持服务名 "scanopy" 兼容 n9e config:
     #   [Center] ScanopyUrl = "http://scanopy:60072"
-    image: ghcr.1ms.run/scanopy/scanopy/server:latest
+    image: docker.1ms.run/fuqiangleon/scanopy-server:${SCANOPY_TAG:-latest}
     container_name: o9e-scanopy
     restart: always
     environment:

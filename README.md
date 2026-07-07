@@ -11,6 +11,10 @@
 > 镜像怎么来的:由 [OneStar-Projects/n9e](https://github.com/OneStar-Projects/n9e) monorepo
 > 的 `scripts/build-image.sh` 编译(`CGO_ENABLED=0` 静态 + 前端 statik 嵌入)并 push 到
 > Docker Hub。本仓库只管"怎么部署",不管"怎么 build"。
+>
+> scanopy 的 `server` + `daemon` 用 **fork 版**(`fuqiangleon/scanopy-{server,daemon}`,含 SNMP
+> 存活兜底改动),由 fork 仓库根的 `build-images.sh` 构建推送。更新只需改 `.env` 的 `SCANOPY_TAG`
+> (默认 latest)后:`docker compose pull scanopy scanopy-daemon && docker compose up -d scanopy scanopy-daemon`。
 
 ## 前置依赖
 
