@@ -288,7 +288,9 @@ services:
       LS_JAVA_OPTS: -Xms${LS_HEAP_SIZE:-1g} -Xmx${LS_HEAP_SIZE:-1g}
       # pipeline 的 elasticsearch output 引用它做 basic auth
       ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
-      xpack.monitoring.enabled: "false"
+      # 不要在此用 env 设 xpack.* 等 logstash.yml setting:Logstash entrypoint 会把
+      # 这类 env 回写进 logstash.yml,而它是 :ro 挂载 → "read-only file system" 启动崩。
+      # xpack.monitoring.enabled 已写在 config/logstash.yml。
     volumes:
       - ./etc/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
       - ./etc/logstash/pipeline:/usr/share/logstash/pipeline:ro

@@ -83,7 +83,28 @@ fix_mount_perms() {
     # 明确跳过 etc/tls: 里面是 nginx 私钥, 不能 world-readable。
     chmod -R o+rX "${DIR}/initsql" "${DIR}/initsql-extra" 2>/dev/null || true
     chmod o+r "${DIR}/etc/mysql/my.cnf" "${DIR}/etc/o9e/config.toml.tpl" 2>/dev/null || true
-    echo "[init-env] 已修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl 对 other 可读;tls 私钥不动)"
+    # logstash 的 config/pipeline 同为非 root 容器(uid 1000)读的 bind 挂载,
+    # 需 o+r(文件)+ o+x(目录);umask 027 的机器 checkout 出来是 640/750,容器读不了。
+    chmod -R o+rX "${DIR}/etc/logstash" 2>/dev/null || true
+    echo "[init-env] 已修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl/etc/logstash 对 other 可读;tls 私钥不动)"
+}
+
+# 校验已存在的 .env 是否缺 .env.example 里的变量(升级场景:老 .env 不含后来新增的键,
+# 如 ES 引入的 ELASTIC_PASSWORD)。只告警不自动补:部分键不能瞎生成 —— SCANOPY_TOKEN 要
+# scanopy-bootstrap 拿真值,密码类若对应数据卷已初始化则新生成也对不上。故让运维照提示手动补。
+check_env_completeness() {
+    [ -f "${DST}" ] || return 0
+    local key had=0
+    while IFS= read -r key; do
+        grep -qE "^${key}=" "${DST}" && continue
+        [ "${had}" = 0 ] && { echo "[init-env] WARN: 现有 .env 缺以下 .env.example 里的变量(多为升级新增):" >&2; had=1; }
+        echo "[init-env]   - ${key}" >&2
+    done < <(grep -oE '^[A-Za-z0-9_]+=' "${SRC}" | sed 's/=$//' | sort -u)
+    if [ "${had}" = 1 ]; then
+        echo "[init-env]   ⚠ 密码/密钥类缺失 → 对应服务启动失败或认证 401(例:ELASTIC_PASSWORD 空时 ES/logstash 起不来)。" >&2
+        echo "[init-env]   请手动补进 ${DST}:密码类用 'openssl rand -hex 24',其余抄 .env.example 的默认值。" >&2
+    fi
+    return 0
 }
 
 ensure_es_sysctl() {
@@ -153,6 +174,9 @@ gen_tls_cert
 
 # --- 修正 bind 挂载文件权限(容器非 root 读取;checkout/pull 会抹掉 o+r)---
 fix_mount_perms
+
+# --- 升级场景:已存在的 .env 若缺 .env.example 的新增变量,告警提示补齐 ---
+check_env_completeness
 
 # --- Elasticsearch 宿主内核要求 vm.max_map_count>=262144 ---
 ensure_es_sysctl
