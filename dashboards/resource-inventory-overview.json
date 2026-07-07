@@ -91,7 +91,7 @@
         "datasourceValue": 1,
         "targets": [
           {
-            "expr": "sum(snmp_up)",
+            "expr": "count(snmp_up)",
             "legend": "",
             "instant": false,
             "maxDataPoints": 240,
@@ -145,7 +145,7 @@
         "datasourceValue": 1,
         "targets": [
           {
-            "expr": "sum(snmp_icmp_up)",
+            "expr": "count(snmp_icmp_up)",
             "legend": "",
             "instant": false,
             "maxDataPoints": 240,
@@ -555,16 +555,21 @@
           "colorMode": "background",
           "displayMode": "labelValuesToRows",
           "aggrDimension": [
-            "LocalIP",
-            "BU"
+            "agent_host",
+            "device_name",
+            "area",
+            "device_type",
+            "brand",
+            "model",
+            "location"
           ],
-          "sortColumn": "LocalIP",
+          "sortColumn": "agent_host",
           "sortOrder": "ascend",
           "linkMode": "appendLinkColumn",
           "links": [
             {
               "title": "详情",
-              "url": "/dashboards/net-detail?ipadd=${__field.labels.LocalIP}&jieru=1&sys_name=all",
+              "url": "/dashboards/net-detail?ipadd=${__field.labels.agent_host}&jieru=1&sys_name=all",
               "targetBlank": true
             }
           ]
@@ -639,10 +644,15 @@
             "id": "organize",
             "options": {
               "renameByName": {
-                "BU": "业务部",
+                "agent_host": "设备IP",
+                "device_name": "设备名称",
+                "area": "区域",
+                "device_type": "设备类型",
+                "brand": "品牌",
+                "model": "型号",
+                "location": "位置",
                 "A": "SNMP状态",
-                "B": "ICMP状态",
-                "LocalIP": "设备IP"
+                "B": "ICMP状态"
               }
             }
           }
@@ -1190,5 +1200,5 @@
       }
     ]
   },
-  "note": "bundle-version: 3"
+  "note": "bundle-version: 5"
 }

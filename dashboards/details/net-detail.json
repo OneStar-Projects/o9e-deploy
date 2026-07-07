@@ -2,7 +2,7 @@
   "name": "网络设备详情",
   "ident": "net-detail",
   "tags": "managed-by-bundle",
-  "note": "bundle-version: 1 | src: integrations/SNMP/switch branch.json",
+  "note": "bundle-version: 3 | src: integrations/SNMP/switch branch.json",
   "configs": {
     "graphTooltip": "default",
     "graphZoom": "default",
@@ -11,16 +11,16 @@
       {
         "custom": {
           "aggrDimension": [
-            "sys_name",
-            "sys_pm",
-            "LocalIP"
+            "sysName",
+            "model",
+            "agent_host"
           ],
           "calc": "lastNotNull",
           "colorMode": "background",
           "displayMode": "labelValuesToRows",
           "linkMode": "appendLinkColumn",
           "showHeader": true,
-          "sortColumn": "sys_name",
+          "sortColumn": "sysName",
           "sortOrder": "ascend"
         },
         "datasourceCate": "prometheus",
@@ -83,7 +83,7 @@
         ],
         "targets": [
           {
-            "expr": "snmp_sys_uptime{LocalIP=~\"$ipadd\"}",
+            "expr": "snmp_uptime{agent_host=~\"$ipadd\"} / 100",
             "instant": false,
             "legend": "设备在线",
             "maxDataPoints": 240,
@@ -101,10 +101,10 @@
                 "ifDescr": 0
               },
               "renameByName": {
-                "LocalIP": "管理IP地址",
+                "agent_host": "管理IP地址",
                 "ifDescr": "",
-                "sys_name": "设备名称",
-                "sys_pm": "设备型号"
+                "sysName": "设备名称",
+                "model": "设备型号"
               }
             }
           }
@@ -153,7 +153,7 @@
         },
         "targets": [
           {
-            "expr": "count(snmp_interface_ifOperStatus{LocalIP=~\"$ipadd\"}) by (LocalIP, sys_name)",
+            "expr": "count(snmp_interface_status_ifOperStatus{agent_host=~\"$ipadd\"}) by (agent_host, sysName)",
             "legend": "设备端口数",
             "maxDataPoints": 240,
             "refId": "A"
@@ -166,70 +166,6 @@
           }
         ],
         "type": "stat",
-        "version": "3.0.0"
-      },
-      {
-        "custom": {
-          "calc": "lastNotNull",
-          "textMode": "valueAndName",
-          "valueField": "Value"
-        },
-        "datasourceCate": "prometheus",
-        "datasourceValue": "${jieru}",
-        "id": "b0a707e6-2059-4158-8e44-ee19db45e12e",
-        "layout": {
-          "h": 4,
-          "i": "b0a707e6-2059-4158-8e44-ee19db45e12e",
-          "isResizable": true,
-          "w": 7,
-          "x": 17,
-          "y": 0
-        },
-        "maxPerRow": 4,
-        "name": "设备资源占用",
-        "options": {
-          "standardOptions": {
-            "decimals": 0
-          },
-          "thresholds": {
-            "steps": [
-              {
-                "color": "#3FC453",
-                "type": "base",
-                "value": null
-              },
-              {
-                "color": "#FF9919",
-                "value": 60
-              },
-              {
-                "color": "#FF656B",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "targets": [
-          {
-            "expr": "snmp_cpu_usage{LocalIP=~\"$ipadd\", entity_name=~\"RPU|MPU|MCU\"}",
-            "legend": "CPU使用率",
-            "maxDataPoints": 240,
-            "refId": "A"
-          },
-          {
-            "expr": "snmp_mem_usage{LocalIP=~\"$ipadd\", entity_name=~\"RPU|MPU|MCU\"}",
-            "legend": "内存使用率",
-            "maxDataPoints": 240,
-            "refId": "B"
-          }
-        ],
-        "transformations": [
-          {
-            "id": "organize",
-            "options": {}
-          }
-        ],
-        "type": "gauge",
         "version": "3.0.0"
       },
       {
@@ -360,13 +296,13 @@
         ],
         "targets": [
           {
-            "expr": "snmp_interface_ifSpeed{LocalIP=~\"$ipadd\"}",
+            "expr": "snmp_interface_status_ifSpeed{agent_host=~\"$ipadd\"}",
             "legend": "端口速率",
             "maxDataPoints": 240,
             "refId": "B"
           },
           {
-            "expr": "snmp_interface_ifOperStatus{LocalIP=~\"$ipadd\"}",
+            "expr": "snmp_interface_status_ifOperStatus{agent_host=~\"$ipadd\"}",
             "legend": "端口状态",
             "maxDataPoints": 240,
             "refId": "C"
@@ -429,8 +365,8 @@
         },
         "targets": [
           {
-            "expr": "snmp_interface_ifOperStatus{LocalIP=~\"$ipadd\"}",
-            "legend": "{{LocalIP}}",
+            "expr": "snmp_interface_status_ifOperStatus{agent_host=~\"$ipadd\"}",
+            "legend": "{{agent_host}}",
             "maxDataPoints": 240,
             "refId": "A"
           }
@@ -472,13 +408,13 @@
         },
         "targets": [
           {
-            "expr": "snmp_interface_ifInOctets{LocalIP=~\"$ipadd\"}",
+            "expr": "snmp_interface_status_ifInOctets{agent_host=~\"$ipadd\"}",
             "legend": "端口IN流量",
             "maxDataPoints": 240,
             "refId": "A"
           },
           {
-            "expr": "snmp_interface_ifOutOctets{LocalIP=~\"$ipadd\"}",
+            "expr": "snmp_interface_status_ifOutOctets{agent_host=~\"$ipadd\"}",
             "legend": "端口OUT流量",
             "maxDataPoints": 240,
             "refId": "B"
@@ -556,7 +492,7 @@
         ],
         "targets": [
           {
-            "expr": "irate(snmp_interface_ifInOctets{ifDescr=~\"$ifname\", LocalIP=~\"$ipadd\"}[5m])",
+            "expr": "irate(snmp_interface_status_ifInOctets{ifDescr=~\"$ifname\", agent_host=~\"$ipadd\"}[5m])",
             "legend": "INT",
             "maxDataPoints": 240,
             "refId": "A",
@@ -566,7 +502,7 @@
             }
           },
           {
-            "expr": "-irate(snmp_interface_ifOutOctets{ifDescr=~\"$ifname\", LocalIP=~\"$ipadd\"}[5m])",
+            "expr": "-irate(snmp_interface_status_ifOutOctets{ifDescr=~\"$ifname\", agent_host=~\"$ipadd\"}[5m])",
             "legend": "OUT",
             "maxDataPoints": 240,
             "refId": "B",
@@ -601,7 +537,7 @@
           "cate": "prometheus",
           "value": "${jieru}"
         },
-        "definition": "label_values(LocalIP)",
+        "definition": "label_values(agent_host)",
         "label": "ip地址",
         "multi": true,
         "name": "ipadd",
@@ -614,10 +550,10 @@
           "cate": "prometheus",
           "value": "${jieru}"
         },
-        "definition": "label_values(sys_name)",
+        "definition": "label_values(sysName)",
         "label": "设备名称",
         "multi": true,
-        "name": "sys_name",
+        "name": "sysName",
         "type": "query"
       },
       {
@@ -626,7 +562,7 @@
           "cate": "prometheus",
           "value": "${jieru}"
         },
-        "definition": "label_values(snmp_interface_ifOperStatus{LocalIP=~\"$ipadd\"}, ifDescr)",
+        "definition": "label_values(snmp_interface_status_ifOperStatus{agent_host=~\"$ipadd\"}, ifDescr)",
         "label": "接口名",
         "multi": true,
         "name": "ifname",
