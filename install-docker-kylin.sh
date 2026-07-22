@@ -12,14 +12,13 @@
 #         chmod +x install-docker-kylin.sh
 #         sudo ./install-docker-kylin.sh
 #
-#  ----- 代理开关(本机需经代理才能出网时使用)-----
-#    直连出网(默认):
-#         sudo ./install-docker-kylin.sh
+#  ----- 代理开关(本部署默认走本地 HTTP 代理出网)-----
+#    默认:走本地 HTTP 代理直连官方 Docker Hub(本部署标准方式):
+#         sudo ./install-docker-kylin.sh                                   # 默认代理 http://127.0.0.1:1080
+#         sudo PROXY_ADDR=http://127.0.0.1:7890 ./install-docker-kylin.sh  # 换端口/地址
 #
-#    走代理出网:
-#         sudo USE_PROXY=1 ./install-docker-kylin.sh
-#         # 默认代理地址 http://127.0.0.1:8080,可自定义:
-#         sudo USE_PROXY=1 PROXY_ADDR=http://127.0.0.1:8080 ./install-docker-kylin.sh
+#    直连出网(无代理、无镜像加速,一般拉不动 Docker Hub,仅内网自建源时用):
+#         sudo USE_PROXY=0 ./install-docker-kylin.sh
 #
 #  !!! 不要把脚本内容整段复制粘贴到终端执行 !!!
 #  !!! 必须先保存成文件再运行 !!!
@@ -57,12 +56,13 @@ ORIG_USER="${SUDO_USER:-$USER}"
 
 ###############################################################################
 # 代理开关
-#   USE_PROXY=1 时启用; PROXY_ADDR 自定义代理地址(默认 127.0.0.1:8080)
+#   本部署用「默认 Docker Hub + 本地 HTTP 代理」出网,故默认开启代理(USE_PROXY=1)。
+#   PROXY_ADDR 默认本地 1080;换端口/地址用 PROXY_ADDR=... 覆盖。
 #   作用范围: curl(环境变量) + yum(yum.conf) + docker daemon(systemd)
-#   no_proxy 只排除本地/内网,绝不排除镜像源域名
+#   no_proxy 只排除本地/内网。直连出网(不推荐,无镜像加速多半失败)用 USE_PROXY=0。
 ###############################################################################
-USE_PROXY="${USE_PROXY:-0}"
-PROXY_ADDR="${PROXY_ADDR:-http://127.0.0.1:8080}"
+USE_PROXY="${USE_PROXY:-1}"
+PROXY_ADDR="${PROXY_ADDR:-http://127.0.0.1:1080}"
 NO_PROXY_LIST="localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
 YUM_CONF="/etc/yum.conf"
 YUM_PROXY_ADDED=0   # 标记 yum.conf 是否被本脚本临时改动
@@ -132,7 +132,9 @@ DOCKER_REPO_FILE="/etc/yum.repos.d/docker-ce.repo"
 CONTAINER_SELINUX_URL="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/container-selinux-2.229.0-2.module_el8.10.0+4082+f7f0c95e.noarch.rpm"
 ALMALINUX_REPO="https://mirrors.aliyun.com/almalinux/8/AppStream/x86_64/os/Packages/"
 
-# 国内镜像源(dockerproxy/ustc/163 已失效, 仅保留实测可用的 1ms + daocloud)
+# 镜像加速器:保留 1ms + daocloud(docker.io 优先走镜像,dockerd 出网再经 1080 代理)。
+# 默认出网走本地 HTTP 代理(见上方 USE_PROXY/PROXY_ADDR);镜像源作为 docker.io 的加速/兜底。
+# dockerproxy/ustc/163 已失效,不再列入。
 MIRRORS=(
     "https://docker.1ms.run"
     "https://docker.m.daocloud.io"
