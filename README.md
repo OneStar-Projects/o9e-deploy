@@ -172,6 +172,16 @@ RETENTION_DAYS=30 ./es-ilm-bootstrap.sh   # 改保留天数重跑即可(幂等)
 
 > 只收 NetFlow。要接主机/应用日志(syslog/filebeat),在 `etc/logstash/pipeline/` 再加 input/pipeline。
 
+## DeepFlow(业务服务拓扑数据源)
+
+n9e「业务服务」拓扑(`application_map`)的数据来自 **DeepFlow server**——一套**独立 compose 栈**,
+跑在**采集机**上(不在本主栈内),与本机 `deepflow-agent` 配套,把聚合指标 remote-write 回 n9e。
+
+部署见 [`deepflow/README.md`](deepflow/README.md)。要点:`cd deepflow && cp .env.example .env`
+→ 改 `NODE_IP_FOR_DEEPFLOW` + `server.yaml` 的 exporter 上报地址 → `docker compose up -d`
+→ **`./deepflow-provision.sh`**(装 deepflow-ctl + 建采集器组/对齐端口 17001/17002/建 agent_sync 资源域——
+不做这步 agent 必报 SOCKET_ERROR、拓扑无数据)。
+
 ## 故障排查
 
 ```bash
@@ -209,5 +219,11 @@ o9e-deploy/
 │   ├── logstash/{config/logstash.yml, pipeline/netflow.conf}  # NetFlow → ES 管道
 │   └── tls/                     ← 真证书放这;留空则 init-env.sh 预签自签证书(容器内无法联网装 openssl 自签)
 ├── initsql/                     ← 上游 schema 真目录(自包含)
-└── initsql-extra/               ← fork 的增量 SQL
+├── initsql-extra/               ← fork 的增量 SQL
+└── deepflow/                    ← 独立 DeepFlow server 栈(采集机部署;业务服务拓扑数据源)
+    ├── docker-compose.yaml      #   端口预置 17001/17002
+    ├── .env.example
+    ├── common/config/           #   server/clickhouse/mysql/app 配置(vendored)
+    ├── deepflow-provision.sh    #   起栈后跑:装 deepflow-ctl + agent-group 端口对齐
+    └── README.md                #   部署步骤 + 端口对齐坑
 ~~~

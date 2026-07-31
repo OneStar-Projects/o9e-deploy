@@ -12,3 +12,6 @@ etc/tls/*.key
 *.sql.bak
 backup-*.sql
 /1/
+
+# 离线现场预放的 deepflow-ctl 二进制(~71MB),按需拷入,勿提交
+deepflow/deepflow-ctl

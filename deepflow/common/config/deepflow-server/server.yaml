@@ -1,0 +1,79 @@
+log-file: /var/log/deepflow/server.log
+log-level: info
+controller:
+  election-name: deepflow-server
+  election-namespace: deepflow
+  grpc-max-message-length: 104857600
+  grpc-port: 20035
+  kubeconfig:
+  listen-port: 20417
+  clickhouse:
+    database: flow_tag
+    host: clickhouse
+    port: 9000
+    user-name: default
+    user-password:
+  mysql:
+    database: deepflow
+    host: mysql
+    port: 30130
+    timeout: 30
+    user-name: root
+    user-password: deepflow
+  genesis:
+    local_ip_ranges:
+      # 覆盖所有内网段：RFC1918 私网 + 本环境用到的非标 192.169.x
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 192.169.0.0/16
+  trisolaris:
+    trident-type-for-unkonw-vtap: 3
+    chrony:
+      # deepflow 下发给 agent 的校时源。内网采集机连不上公网时改成现场内网 NTP，否则 agent
+      # 时间校准降级、时序时间戳可能偏移(不阻塞启动，故隐蔽)。
+      host: ntp.cloud.aliyuncs.com
+      port: 123
+      timeout: 1
+ingester:
+  exporters:
+    - protocol: prometheus
+      enabled: true
+      endpoints:
+        # ⚠ 改成你的 n9e remote-write 入口(此文件不做 env 替换,须手改)。
+        #    通常是 http://<n9e_ip>:17000/prometheus/v1/write
+        - http://10.185.2.13:17000/prometheus/v1/write
+      data-sources:
+        - flow_metrics.application.1m
+        - flow_metrics.network.1m
+        - flow_metrics.application_map.1m
+        - flow_metrics.network_map.1m
+      export-fields:
+        - $tag
+        - $metrics
+      queue-count: 4
+      queue-size: 100000
+      batch-size: 1024
+      flush-timeout: 10
+  es-syslog: false
+  ckdb:
+    cluster-name:
+    external: false
+    host: clickhouse
+    port: 9000
+    storage-policy:
+  ckdb-auth:
+    password:
+    username: default
+querier:
+  listen-port: 20416
+  clickhouse:
+    database: flow_tag
+    host: clickhouse
+    port: 9000
+    timeout: 60
+    user-name: default
+    user-password:
+  deepflow-app:
+    host: deepflow-app
+    port: 20418
