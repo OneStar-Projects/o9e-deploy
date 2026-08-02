@@ -119,6 +119,7 @@ Redis 是缓存 + cfgsync 临时态,可不备份。
 | 80 | ✓ | nginx | HTTP → 301 → HTTPS |
 | 443 | ✓ | nginx | 业务 + 前端(TLS) |
 | 20090 | 可选 | nginx (stream) | ibex RPC;categraf 仅内网时建议改 `127.0.0.1:20090:20090` |
+| 60072 | ✓ | scanopy | scanopy server 直连口;供不在本机的 scanopy daemon 出站直连(nginx 不反代;`SCANOPY_PORT` 可改,仅本机访问改 `127.0.0.1:60072:60072`)|
 | 17000 | ✗ | n9e | 内部 |
 | 8428 | ✗ | victoriametrics | 内部 |
 | 3306 | ✗ | mysql | 内部 |
@@ -210,6 +211,8 @@ o9e-deploy/
 ├── init-env.sh                  # 生成 .env(强随机密码 + TOPO_API_TOKEN + ELASTIC_PASSWORD)+ 预签 TLS 证书 + 修正挂载权限 + 设 vm.max_map_count
 ├── scanopy-bootstrap.sh         # 部署后 setup scanopy + 写回 SCANOPY_TOKEN + 重建 n9e/topo-studio
 ├── scanopy-lock-registration.sh # 锁定 scanopy 注册
+├── gen-scanopy-daemons.sh       # 为多台采集机批量签发 scanopy daemon + 生成各自 compose(可选)
+├── es-ilm-bootstrap.sh          # ES ILM 保留策略:netflow-* 索引超期自动删(默认 15 天),防磁盘撑满
 ├── docker-compose.yaml          # 11 容器编排(n9e/topo-studio 走 fuqiangleon/o9e;ES/Logstash 走 docker.elastic.co;纯 pull)
 ├── .env.example
 ├── etc/

@@ -3,9 +3,10 @@
 #
 # 行为:
 #   - .env 已存在 → 跳过 .env 生成(避免覆盖运维改过的值,先 mv 备份再重跑)
-#   - .env 不存在 → 拷贝 .env.example 并替换:
-#       MYSQL_ROOT_PASSWORD / N9E_DB_PASSWORD / REDIS_PASSWORD
-#     用 32 字符 A-Za-z0-9 强随机替换占位符
+#   - .env 不存在 → 拷贝 .env.example 并替换 8 个密钥字段(占位符 → 强随机):
+#       MYSQL_ROOT_PASSWORD / N9E_DB_PASSWORD / REDIS_PASSWORD /
+#       SCANOPY_ADMIN_PASSWORD / SCANOPY_POSTGRES_PASSWORD / TOPO_API_TOKEN / ELASTIC_PASSWORD
+#         → 32 字符 A-Za-z0-9;   N9E_SECRET_MASTER_KEY → 64 hex(AES-256)
 #   - etc/tls/{fullchain,privkey}.pem 缺失 → 用宿主 openssl 预签自签证书(CN=N9E_DOMAIN)
 #     原因:nginx 容器内无出网路径,无法 apk 装 openssl 自签,故移到宿主侧做
 #   - 修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl 对 other 可读,跳过 tls 私钥)

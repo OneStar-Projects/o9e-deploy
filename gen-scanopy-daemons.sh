@@ -10,26 +10,26 @@
 #
 # 用法:
 #   SCANOPY_ADMIN_EMAIL=admin@x.com SCANOPY_ADMIN_PASSWORD=xxx \
-#   SCANOPY_URL=http://192.168.50.237:60072 \
+#   SCANOPY_URL=http://<scanopy-server-ip>:60072 \
 #     ./gen-scanopy-daemons.sh office-a office-b dc1
 #
 # 环境变量:
-#   SCANOPY_URL             scanopy server 地址(在能访问它的机器上跑),默认 http://192.168.50.237:60072
+#   SCANOPY_URL             *必填* scanopy server 地址(在能访问它的机器上跑),如 http://<scanopy-server-ip>:60072
 #   SCANOPY_ADMIN_EMAIL     *必填* 管理员邮箱(登录)
 #   SCANOPY_ADMIN_PASSWORD  *必填* 管理员密码
 #   SCANOPY_NETWORK_NAME    所有 daemon 绑定的网络名(默认 office),登录后自动查 id —— 汇聚到同一张拓扑
 #   SCANOPY_NETWORK_ID      可选,显式指定网络 id(优先于按名查;一般不用填)
-#   DAEMON_IMAGE            daemon 镜像,默认 ghcr.io/scanopy/scanopy/daemon:latest
+#   DAEMON_IMAGE            daemon 镜像,默认 fuqiangleon/scanopy-daemon:latest(fork 版,含 SNMP 存活兜底;勿用官方,会丢兜底)
 #   DAEMON_SERVER_URL       写进 compose 的 server 地址(daemon 容器里连的),默认同 SCANOPY_URL
 #   OUT_DIR                 产物目录,默认 ./scanopy-daemons
 set -euo pipefail
 
-SCANOPY_URL="${SCANOPY_URL:-http://192.168.50.237:60072}"
+SCANOPY_URL="${SCANOPY_URL:?需设置 SCANOPY_URL,如 http://<scanopy-server-ip>:60072}"
 ADMIN_EMAIL="${SCANOPY_ADMIN_EMAIL:?需设置 SCANOPY_ADMIN_EMAIL}"
 ADMIN_PASSWORD="${SCANOPY_ADMIN_PASSWORD:?需设置 SCANOPY_ADMIN_PASSWORD}"
 NETWORK_ID="${SCANOPY_NETWORK_ID:-}"            # 显式指定网络 id(优先);留空则登录后按名字查
 NETWORK_NAME="${SCANOPY_NETWORK_NAME:-office}" # 按网络名查 id(默认 office),scanopy 重装后 id 变也不用改脚本
-DAEMON_IMAGE="${DAEMON_IMAGE:-ghcr.io/scanopy/scanopy/daemon:latest}"
+DAEMON_IMAGE="${DAEMON_IMAGE:-fuqiangleon/scanopy-daemon:latest}"
 DAEMON_SERVER_URL="${DAEMON_SERVER_URL:-$SCANOPY_URL}"
 OUT_DIR="${OUT_DIR:-./scanopy-daemons}"
 
