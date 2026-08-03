@@ -41,6 +41,11 @@ docker compose ps       # 各容器逐步 healthy
 
 deepflow 侧无本地 UI(grafana 已移除);数据是否通过 `deepflow-ctl agent list` 与 n9e 拓扑验证。
 
+> ⚠ **本机(采集机自身)那个 deepflow-agent 的 `controller-ips` 要填本机真实网卡 IP,别用 `127.0.0.1`**。
+> vtap 身份 =(ctrl_ip, ctrl_mac),走 loopback 拿到的 ctrl_mac 是 `00:00:00:00:00:00`,配不上任何
+> vinterface → 这台本机 agent 单独注册不进(日志 `vinterface(mac=00:00:00:00:00:00) without finding data`)。
+> 填 `NODE_IP_FOR_DEEPFLOW` 同一个真实 IP 即可。别的机器的 agent 本就填采集机 IP,不受影响。
+
 > **重装/重置**:数据落在宿主 `/opt/deepflow/{mysql,clickhouse,clickhouse_storage}`(compose 里 bind mount)。
 > `init.sql` 只在 **mysql 卷为空** 时首启执行一次;若这台跑过 deepflow 或想重置 root 口令,须先
 > `docker compose down && sudo rm -rf /opt/deepflow/mysql` 再 `up -d`,否则 `init.sql` 不生效、server 连不上库。
@@ -58,7 +63,7 @@ deepflow 用「组」归类 agent,端口等配置挂在组上。agent 包在 `/e
 (`--id` 须 `g-`+10 位字母数字),与 agent 包烘的 `DEEPFLOW_AGENT_GROUP_ID` 一一对上——所以新机也能直接对齐,
 不用再改 agent 包。想换 id:`AGENT_GROUP_ID=g-xxx AGENT_GROUP_NAME=xxx ./deepflow-provision.sh` + agent 包同步改。
 
-### B. agent-group-config(端口对齐,核心坑)
+### B. agent-group-config(端口对齐 + 本机资源上报,核心坑)
 
 社区版 deepflow-server **默认对 agent 通告控制口 30035 / 数据口 30033**,而 agent 包烘的是 **17001**
 (n9e Jenkins ① 的 `DEEPFLOW_CONTROLLER_PORT`)。**四处必须一致**,缺一 agent 必报
@@ -78,15 +83,37 @@ global:
   communication:
     proxy_controller_port: 17001
     ingester_port: 17002
+inputs:
+  resources:
+    workload_resource_sync_enabled: true    # 见下,无云平台部署的命门
 ```
 
 **第 2 处是真正告诉 agent 用哪口的地方**——只改 compose+agent 不改它,server 仍通告默认 30035/30033,
 agent 被引去连没发布的口 → 断链。agent-group-config 走 controller HTTP api(30417,改控制口它不变),
 所以脚本无需 `--rpc-port`。
 
+**`workload_resource_sync_enabled: true` 比端口更致命**(默认 `false`):本套是纯 agent、无 K8s/云平台,
+false 时 agent 不上报本机运行环境 → `agent_sync` 域(下文 C)拿不到 VM,server 日志刷
+`invalid vm count (0)` / `domain is not verified, does nothing` → host_device/vinterface 一直空 →
+**任何 agent 都注册不进 vtap、拓扑全空**。开启后 server 据 agent 上报抽象出一个 CHOST,死锁才解。
+> 脚本对全新组用 `agent-group-config **create**`(旧版误用 `update`,对空组会静默 exit-0 空跑、把整份
+> 配置吞掉,端口和 workload sync 都没写进去——这正是"脚本跑完却收不到数据"的老坑)。
+
 > **换端口**:改本目录 `docker-compose.yaml` 的 `ports:` 左值 + `PROXY_CONTROLLER_PORT=/INGESTER_PORT=`
 > 环境跑 `deepflow-provision.sh` + agent 包对应改;三处一致即可。别把 `17001:20035`/`17002:20033`
 > 的左右接反(容器内 20035=控制/20033=数据是固定的),否则 server 报 `header type 42 is invalid`。
+
+> **⚠ VIP/NAT 场景(agent 够不着 server 网卡 IP,只能走 VIP)**:server 默认对 agent 通告
+> `NODE_IP_FOR_DEEPFLOW`(本机网卡 IP);远端 agent 到不了这个 IP 就会死循环——注册进来是 NORMAL,
+> 但 `l7_flow_log`/`application_map` 恒空,agent 日志刷 `Dial server(<NODE_IP>:17001) failed: transport error`
+> / `grpc client not connected`。解法:跑脚本时设 **`ADVERTISE_IP=<VIP>`**,把 group-config 的
+> `proxy_controller_ip/ingester_ip` 覆盖成 VIP,让 server 改通告 VIP:
+> ```bash
+> ADVERTISE_IP=10.77.64.56 ./deepflow-provision.sh    # VIP 须同时转发 17001+17002
+> ```
+> `NODE_IP_FOR_DEEPFLOW` 仍保持真实网卡 IP 不动(server 内部 genesis 自寻址要用它),两键解耦不冲突。
+> 本机(采集机自身)那个 agent 走 hairpin 回自己 VIP 即可,与远端共用同一组配置,无需单独处理;
+> 但它的 `controller-ips`(bootstrap)仍填本机真实 IP,别用 `127.0.0.1`(见上文 zero-MAC 坑)。
 
 ### C. domain(agent_sync 资源域)
 
@@ -123,8 +150,12 @@ config:
 # agent 状态(EXCEPTIONS 空 + STATE=NORMAL 才对;改控制口后带 --rpc-port 17001)
 deepflow-ctl --rpc-port 17001 agent list
 
-# 回读 group-config 端口(确认第 2 处已落库)
-deepflow-ctl --api-port 30417 agent-group-config list g-Ir1cV5gtqA | grep -E "controller_port|ingester_port"
+# 回读 group-config(确认第 2 处已落库:端口 + workload sync)
+deepflow-ctl --api-port 30417 agent-group-config list g-Ir1cV5gtqA -o yaml \
+  | grep -E "controller_port|ingester_port|workload_resource_sync_enabled"
+
+# agent 注册不进 / 拓扑空,看 server 是不是死在没 VM(workload sync 没开的典型症状)
+docker logs deepflow-server 2>&1 | grep -Ei "invalid vm count|not verified"
 
 # server 有没有因端口接反报错
 docker logs deepflow-server | grep -i "header type 42"
