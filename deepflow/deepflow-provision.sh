@@ -14,11 +14,14 @@
 #     1) compose 的 ports:            17001:20035 / 17002:20033   ← 本目录 docker-compose.yaml 已就位
 #     2) agent-group-config(本步 B)： proxy_controller_port / ingester_port ← 真正告诉 agent 用哪口的地方
 #     3) agent 本地 /etc/deepflow-agent.yaml: controller-port 17001            ← agent 包 install.sh 负责
-#     4) server.yaml:                 不用动(group-config 覆盖优先)
+#     4) server.yaml 的 agent 侧端口:  不用动(group-config 覆盖优先)
 #   本脚本走 controller HTTP api(默认 30417，改控制口它不变)，故无需 --rpc-port。全部 idempotent，可重复跑。
 #
+#   注:server.yaml 的 ingester 出口(deepflow-server → n9e remote-write)group-config 覆盖不到,
+#       由 up 之前的 ./render-config.sh 从 .env 的 N9E_REMOTE_WRITE 渲染,不在本脚本管辖内。
+#
 # 用法：
-#   cd deepflow && docker compose up -d && ./deepflow-provision.sh
+#   cd deepflow && cp .env.example .env && $EDITOR .env && ./render-config.sh && docker compose up -d && ./deepflow-provision.sh
 #
 # 可覆盖(env)：
 #   AGENT_GROUP_ID / AGENT_GROUP_NAME   默认 g-Ir1cV5gtqA / legacy-host(与 agent 包一致，勿轻改)

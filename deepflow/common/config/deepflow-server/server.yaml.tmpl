@@ -40,9 +40,9 @@ ingester:
     - protocol: prometheus
       enabled: true
       endpoints:
-        # ⚠ 改成你的 n9e remote-write 入口(此文件不做 env 替换,须手改)。
-        #    通常是 http://<n9e_ip>:17000/prometheus/v1/write
-        - http://10.185.2.13:17000/prometheus/v1/write
+        # ⚠ 下一行出口由 render-config.sh 从 .env 的 N9E_REMOTE_WRITE 渲染(勿手改本 .tmpl)。
+        #    要改 n9e 入口:改 .env 后重跑 ./render-config.sh。
+        - __N9E_REMOTE_WRITE__
       data-sources:
         - flow_metrics.application.1m
         - flow_metrics.network.1m

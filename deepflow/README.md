@@ -24,12 +24,15 @@ prometheus exporter remote-write 到 n9e → 前端查出拓扑。
 ```bash
 cd deepflow
 cp .env.example .env
-$EDITOR .env            # 改 NODE_IP_FOR_DEEPFLOW = 本采集机 IP;确认 DEEPFLOW_VERSION
+$EDITOR .env            # 改 NODE_IP_FOR_DEEPFLOW = 本采集机 IP;
+                        # 改 N9E_REMOTE_WRITE   = http://<你的 n9e IP>:17000/prometheus/v1/write;
+                        # 确认 DEEPFLOW_VERSION
 
-# ⚠ 改 server.yaml(此文件不做 env 替换,必须手改):
-$EDITOR common/config/deepflow-server/server.yaml
-#   ingester.exporters[].endpoints → http://<你的 n9e IP>:17000/prometheus/v1/write
-#   trisolaris.chrony.host        → 内网现场改成内网 NTP(默认公网阿里 NTP,内网连不上)
+# 从 server.yaml.tmpl 渲染出 server.yaml(把 .env 的 N9E_REMOTE_WRITE 写进出口)。
+# server.yaml 是生成物(.gitignore),不再手改、不会被 checkout 打回。必须在 up 之前跑。
+#   若内网连不上公网 NTP:先改模板 $EDITOR common/config/deepflow-server/server.yaml.tmpl
+#   把 trisolaris.chrony.host 改成内网 NTP(改 .tmpl 而非生成的 server.yaml,否则重渲染会丢),再:
+./render-config.sh
 
 docker compose pull
 docker compose up -d
@@ -74,7 +77,8 @@ deepflow 用「组」归类 agent,端口等配置挂在组上。agent 包在 `/e
 | 1 | 本目录 `docker-compose.yaml` 的 `ports:` | `17001:20035`(控制)`17002:20033`(数据) | 已就位 |
 | 2 | **agent-group-config**(存 server MySQL) | `proxy_controller_port:17001` `ingester_port:17002` | **本脚本 B** |
 | 3 | agent 本机 `/etc/deepflow-agent.yaml` | `controller-port:17001` | agent 包 install.sh |
-| 4 | `server.yaml` | **不用动**(group-config 覆盖优先) | — |
+| 4 | `server.yaml` 的 agent 侧端口 | **不用动**(group-config 覆盖优先) | — |
+| 5 | `server.yaml` 的 ingester 出口(→ n9e) | `N9E_REMOTE_WRITE` | `render-config.sh`(装机前渲染) |
 
 第 2 处对应的 group-config yaml(脚本写进去、`deepflow-ctl agent-group-config list <gid> -o yaml` 回读一致):
 
