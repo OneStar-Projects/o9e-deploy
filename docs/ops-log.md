@@ -249,3 +249,71 @@ DELETE FROM target_busi_group WHERE target_ident IN ('YJ-IMC-1','YJ-IMC-2','YJ-I
 - 仍有 **9 台机器未归组**，按"未归组 = 对所有人可见"的语义，它们对任何登录用户都可见。
   正式启用区域隔离前必须全部归组，且需要新机器上线时的归组流程或代码兜底。
 - 22 条告警规则仍全部挂在"资源清单"组，19 个看板在 Default / 资源清单，均未按区域拆分。
+
+---
+
+## 2026-08-27　隔离效果实测（临时账号，已删除）
+
+### 方法
+
+建临时账号 `test-bj`（`Standard` 角色，仅加入 `BJ` 用户组 → 对 `BJ` 业务组有 `rw`，
+该组含唯一机器 `YJ-IMC-1`），登录取 JWT 后逐个调 API，与"正确隔离下应该看到什么"对照。
+
+账号创建走 SQL（`CryptoPass = MD5(salt + "<-*Uk30^96eY*->" + 明文)`，salt 取自 `configs` 表
+的 `salt` 键）。**测试完毕已删除账号及其成员关系，残留检查为 0。**
+
+### 结果
+
+| 端点 | 正确隔离应看到 | 实际看到 | 结论 |
+|---|---|---|---|
+| `GET /targets` | 1 台（YJ-IMC-1） | **10 台** | ❌ 未归组的 9 台全部可见 |
+| `GET /alert-cur-events/list` | 0 条 | **54 条**（全属"资源清单"组） | ❌ 告警不按业务组过滤 |
+| `GET /cfgsync/instances` | 0 个 | **371 个** | ❌ 监控资源零隔离 |
+| `GET /screen/busi-group-status` | 1 个业务组 | **7 个全部**（含 BJ/TJ/YJ/ZJ） | ❌ 大屏零隔离 |
+| `POST /datasource/list` | 受限 | **VM-1 + ES-1 全可见** | ❌ 数据源无授权机制 |
+| `GET /proxy/1/api/v1/query` | 403 | **200**，`count(up)` 返回 61 | ❌ 指标查询无鉴权 |
+| `GET /boards?bids=22,23,17` | 403 | **3 个别组看板** | ❌ 看板可越权读 |
+| `GET /busi-groups` | 仅 BJ | **仅 BJ** | ✅ 唯一正确的一项 |
+| `GET /biz-systems` | — | 0 个（表为空） | ⚠️ 无样本，未验证 |
+| `GET /cfgsync/secrets` | 403 | 0 个（表为空） | ⚠️ 无样本，未验证 |
+
+**8 项可验证的推断中，7 项被证实存在，1 项（业务组列表本身）隔离正确。**
+
+### 关键佐证
+
+对照数据库真实分布，可排除"恰好没数据"的干扰：
+
+```
+alert_cur_event   group_id=2  55 条        ← 全部属于"资源清单"组
+alert_his_event   group_id=2  25224 条（近7天）
+```
+
+test-bj 对 `group_id=2` **没有任何权限**，却读到了其中 54 条。
+
+`GET /proxy/1/api/v1/query?query=count(up)` 返回 61 —— 拿到了全部 61 个 target 的指标，
+包含其他区域的机器。
+
+### 结论对方案的影响
+
+此前列出的漏洞清单由**代码推断**升级为**实测证实**，改造优先级不变：
+
+1. 数据源授权（`/proxy`、`/datasource/list` 两项一并解决）
+2. cfgsync 过滤（371 个实例全裸）
+3. 大屏 bgids 过滤
+4. `EventHistoryGroupView = true`（告警事件，仅配置，最便宜）
+5. `boardGetsByBids` 补权限
+6. 全量归组（消除"未归组 = 公开"）
+
+其中 **第 4 项是纯配置**，应最先做。
+
+### 复现方法
+
+如需再次验证，重建账号：
+
+```sql
+-- 密码 TestBJ@2026tmp，hash 依赖 configs.salt，换环境需重算
+INSERT INTO users (username,nickname,password,roles,create_at,create_by,update_at,update_by)
+VALUES ('test-bj','临时测试账号BJ','<MD5(salt+"<-*Uk30^96eY*->"+明文)>','Standard',
+        UNIX_TIMESTAMP(),'ops-verify',UNIX_TIMESTAMP(),'ops-verify');
+INSERT INTO user_group_member (group_id,user_id) VALUES (2, LAST_INSERT_ID());
+```
