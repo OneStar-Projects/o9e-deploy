@@ -62,10 +62,12 @@ ScanopyToken = "${SCANOPY_TOKEN}"
 TopoStudioUrl   = "http://topo-studio:38123"
 TopoStudioToken = "${TOPO_API_TOKEN}"
 
-# 部分匿名查询路径(指标查询/告警详情)。缺这块默认 false → 未登录调 API 全 401。
+# 匿名查询路径(指标查询/告警详情)。2026-08-27 关闭:开着等于未登录可读全部指标和
+# 告警详情,任何基于业务组/数据源的隔离都会被短路跳过(见 docs/ops-log.md)。
+# 注意告警通知里若含 /alert-cur-event/:eid 链接,关闭后需改用 __token 机制。
 [Center.AnonymousAccess]
-PromQuerier = true
-AlertDetail = true
+PromQuerier = false
+AlertDetail = false
 
 [[Pushgw.Writers]]
 Url = "http://victoriametrics:8428/api/v1/write"
