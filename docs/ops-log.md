@@ -317,3 +317,106 @@ VALUES ('test-bj','临时测试账号BJ','<MD5(salt+"<-*Uk30^96eY*->"+明文)>',
         UNIX_TIMESTAMP(),'ops-verify',UNIX_TIMESTAMP(),'ops-verify');
 INSERT INTO user_group_member (group_id,user_id) VALUES (2, LAST_INSERT_ID());
 ```
+
+---
+
+## 2026-08-27　EventHistoryGroupView = true + 全量归组验证
+
+### 背景
+
+上一轮实测证实两个漏洞：区域账号能看到全平台告警（54 条）和全部未归组机器（9 台）。
+本轮一次性修掉这两个——前者是配置项，后者由人工完成资源归组。
+
+### 变更内容
+
+**① 配置**：`etc/o9e/config.toml.tpl` 的 `[Center]` 段新增
+
+```toml
+EventHistoryGroupView = true
+```
+
+注意必须放在 `[Center.AnonymousAccess]` 子表**之前** —— TOML 语义下，子表之后的键会归入子表。
+
+**② 数据**：13 台 target 全部归组（人工在界面完成）
+
+```
+network   1 台   yjcollect2.13-10.185.2.13
+BJ        1 台   YJ-IMC-1
+TJ        1 台   YJ-IMC-2
+YJ       10 台   COSLOS-116/124/147/18/188/IAM、ecs-wlxxjk、YJ-DHCP-1/2、YJ-IMC-3
+ZJ        0 台
+未归组    0 台
+```
+
+### 执行
+
+```bash
+# 本地改好后同步到服务器(服务器 git checkout 落后且有未提交改动,不走 git pull)
+scp etc/o9e/config.toml.tpl cosl-6456:/tmp/config.toml.tpl.new
+ssh cosl-6456 'cd /home/kylin/o9e-deploy \
+  && cp etc/o9e/config.toml.tpl /tmp/config.toml.tpl.bak.$(date +%Y%m%d-%H%M%S) \
+  && cp /tmp/config.toml.tpl.new etc/o9e/config.toml.tpl'
+docker restart o9e     # 第 6 次轮询(约 18 秒)转 healthy
+```
+
+渲染确认：
+
+```
+EventHistoryGroupView = true
+PromQuerier = false
+AlertDetail = false
+```
+
+### 验证（临时账号 test-bj，仅 BJ 组 rw，该组含 1 台 YJ-IMC-1）
+
+**修复项**
+
+| 端点 | 修复前 | 修复后 | |
+|---|---|---|---|
+| `GET /targets` | 10 台 | **1 台（YJ-IMC-1）** | ✅ |
+| `GET /alert-cur-events/list` | 54 条（资源清单组） | **0 条** | ✅ |
+
+**未修复项（基线对照，确认仍漏，等代码改造）**
+
+| 端点 | 结果 |
+|---|---|
+| `GET /cfgsync/instances` | 371 个实例 |
+| `GET /screen/busi-group-status` | 7 个业务组 |
+| `POST /datasource/list` | ES-1, VM-1 |
+| `GET /proxy/1` `count(up)` | 61 |
+| `GET /boards?bids=22,23,17` | 3 个别组看板 |
+
+账号验证后已删除。
+
+### 回滚方法
+
+```bash
+# 配置
+ssh cosl-6456 'cd /home/kylin/o9e-deploy && cp /tmp/config.toml.tpl.bak.<时间戳> etc/o9e/config.toml.tpl'
+docker restart o9e
+# 归组(如需)
+DELETE FROM target_busi_group WHERE target_ident IN (...);
+```
+
+### 遗留项
+
+**targets 的增量问题未解决。** 本次只清了存量：13 台全部归组后，未归组集合为空，
+`router_target.go:86` 的 `bgids = append(bgids, 0)` 匹配不到东西，所以不再泄露。
+
+但**新机器首次上报时没有业务组记录**，又会落进"未归组"集合，对所有区域用户可见。
+三种解法：
+
+- **A 每次人工归组** —— 靠流程，迟早漏
+- **B 去掉 `append(0)`** —— 一行改动，但新机器对区域用户完全不可见，违背上游"防止新机器丢失"的设计意图
+- **C 建一个 `_未分配` 业务组，target 注册时自动归入，只授权管理员组** —— 推荐。
+  未归组集合恒为空，新机器不丢失，区域用户看不到尚未确定归属的机器
+
+### 剩余改造项优先级
+
+```
+1. 数据源授权        /proxy + /datasource/list 一并解决    ~2.5 天
+2. cfgsync 过滤      371 个实例全裸,面最大                  ~2 天
+3. 大屏 bgids 过滤                                          ~1.5 天
+4. boardGetsByBids 补权限                                   ~0.5 天
+5. target 增量兜底(方案 C)                                  ~0.5 天
+```

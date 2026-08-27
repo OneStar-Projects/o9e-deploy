@@ -62,6 +62,12 @@ ScanopyToken = "${SCANOPY_TOKEN}"
 TopoStudioUrl   = "http://topo-studio:38123"
 TopoStudioToken = "${TOPO_API_TOKEN}"
 
+# 告警事件按业务组隔离。缺省 false = 非 admin 用户看到全平台告警(实测:仅 BJ 组权限的
+# 账号能读到 54 条属于「资源清单」组的告警)。必须为 true,否则区域隔离在告警页直接破功。
+# 见 GetBusinessGroupIds(router_alert_his_event.go:173) —— 只有本项为 true 或用户主动
+# 勾选「我的业务组」时才会按 MyBusiGroupIds 过滤。
+EventHistoryGroupView = true
+
 # 匿名查询路径(指标查询/告警详情)。2026-08-27 关闭:开着等于未登录可读全部指标和
 # 告警详情,任何基于业务组/数据源的隔离都会被短路跳过(见 docs/ops-log.md)。
 # 注意告警通知里若含 /alert-cur-event/:eid 链接,关闭后需改用 __token 机制。
