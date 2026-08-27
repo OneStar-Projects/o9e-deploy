@@ -420,3 +420,116 @@ DELETE FROM target_busi_group WHERE target_ident IN (...);
 4. boardGetsByBids 补权限                                   ~0.5 天
 5. target 增量兜底(方案 C)                                  ~0.5 天
 ```
+
+---
+
+## 2026-08-27　告警规则归属区域业务组
+
+### 背景
+
+上一轮把 `EventHistoryGroupView` 打开后，区域账号看到 0 条告警。**这不是隔离做对了**——
+是区域用户对告警所在的业务组没有权限。结果看着一样，原因完全不同。
+
+根因：告警事件的业务组**来自规则所在的组，不是被监控对象的归属**。
+`models/alert_rule.go:1268`：
+
+```go
+event.GroupId = ar.GroupId
+```
+
+当时 22 条规则全挂在「资源清单」组（该组 0 台机器、只授权管理员组），
+而被监控的 371 个设备归 `YJ`。**规则和它监控的对象不在同一个业务组**，
+导致区域用户能看到自己的设备，却看不到这些设备的任何告警。
+
+另一个佐证：54 条告警的 `target_ident` 全是 snmp 设备 IP（10.185.103.x / 10.185.240.x），
+这些 IP 根本不在 `target` 表里，所以没有业务组——这也解释了 n9e 日志里那批
+`fill event target error, ident: 10.185.252.x doesn't exist in cache`。
+
+### 变更前调研
+
+**22 条规则的 PromQL 全是全局的，没有区域维度：**
+
+```
+net-icmp-down      snmp_icmp_up == 0
+net-port-down      snmp_interface_status_ifOperStatus == 2 and on(...)
+机房温度过高        room_temperature{site!=""} > 35
+UPS负载过高         ups_output_load_percent{site!=""} > 95
+alert-1            cpu_usage_active > 99
+```
+
+`site` 标签的值是具体机房名（`vip汇聚`、`机关227`、`科技园A座1层大屏操作室`…），
+是楼栋/房间级别，**不是区域维度**。
+
+**但指标上已有可用的区域代理 —— `ident` 标签：**
+
+```
+snmp_icmp_up{ ..., ident="yjcollect2.13-10.185.2.13", area="燕郊", location="汇聚机房" }
+room_temperature{ ..., ident="yjcollect2.13-10.185.2.13", site="vip汇聚" }
+```
+
+`ident` 是采集机身份，由 categraf 全局配置提供。而按设计「区域 = 采集机」，
+所以在打 `region` 标签之前，`ident` 就是现成的区域代理。
+
+**当前所有数据都来自同一台采集机 `yjcollect2.13`，它归 `YJ` 组** ——
+因此这批规则整体归 YJ 即可，无需改任何 PromQL。
+
+### 例外：一条规则跨区域
+
+`alert-1`（`cpu_usage_active > 99`）是唯一的主机类规则。实测
+`count(cpu_usage_active) by (ident)` 覆盖 `YJ-IMC-1`(BJ组)、`YJ-IMC-2`(TJ组)
+及 YJ 组的机器，**跨三个区域**。
+
+保持在「资源清单」组不动。理由：BJ/TJ 当前各 1 台是实测样本，正式区域划分未定，
+等定了再决定是拆成多份还是留总部统管。
+
+### 变更内容
+
+```sql
+UPDATE alert_rule SET group_id = 6 WHERE group_id = 2 AND id <> 1;        -- 21 条
+UPDATE alert_cur_event e JOIN alert_rule r ON r.id = e.rule_id            -- 59 条存量事件
+  SET e.group_id = r.group_id WHERE e.group_id <> r.group_id;
+```
+
+结果：
+
+```
+变更前   group_id=2  22 条规则
+变更后   group_id=2   1 条(alert-1)
+         group_id=6  21 条
+当前告警 group_id=6  59 条
+```
+
+### 验证（临时账号 test-bj / test-yj，测后已删除）
+
+```
+账号       机器        告警         可见业务组   监控资源
+test-bj    1 台        0 条         BJ           371 个   ← 仍漏
+test-yj    11 台       55 条        YJ           371 个   ← 仍漏
+```
+
+**告警隔离已正确工作**：YJ 用户看到自己设备的 55 条告警，BJ 用户看到 0 条
+（BJ 组确实没有网络设备）。59→55 是期间有告警恢复的正常波动。
+
+监控资源两个账号都看到 371 个，符合预期——cfgsync 过滤尚未改造。
+
+### 回滚方法
+
+```sql
+UPDATE alert_rule SET group_id = 2 WHERE group_id = 6;
+UPDATE alert_cur_event e JOIN alert_rule r ON r.id = e.rule_id SET e.group_id = r.group_id;
+```
+
+### 遗留项
+
+**① 拆采集机后规则要按区域复制。** 一条规则只能挂一个 `group_id`，
+所以每个区域一套。届时 PromQL 加 `{region="R"}` 过滤。
+
+**`region` 比 `ident` 更适合做这个过滤**：一个区域可能有多台采集机，
+用 `ident` 得写 `{ident=~"a|b|c"}`，加机器就要改规则；用 `region` 则新采集机自动纳入。
+
+**② `alert-1` 的归属待定**，取决于正式区域划分和主机的真实分布。
+
+**③ 一个语义提醒**：区域用户看到的告警数量取决于「规则挂在哪个组」，
+而不是「告警对象属于哪个区域」。若将来出现"A 区域的规则监控了 B 区域的设备"，
+告警会归 A，隔离就错位了。规则的 PromQL 过滤范围必须和它所在的业务组一致——
+这条没有任何机制强制，只能靠规范。
