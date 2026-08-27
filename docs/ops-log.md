@@ -533,3 +533,79 @@ UPDATE alert_cur_event e JOIN alert_rule r ON r.id = e.rule_id SET e.group_id = 
 而不是「告警对象属于哪个区域」。若将来出现"A 区域的规则监控了 B 区域的设备"，
 告警会归 A，隔离就错位了。规则的 PromQL 过滤范围必须和它所在的业务组一致——
 这条没有任何机制强制，只能靠规范。
+
+---
+
+## 2026-08-28　数据源授权列迁移（先于代码部署）
+
+### 背景
+
+数据源授权改造（n9e commit `bf219f1a`）新增 `datasource.busi_group_ids` 列。
+该列由 n9e 启动时的 `AutoMigrate` 自动创建，但**如果等代码部署时才建列，
+会出现一个白屏窗口**：
+
+```
+新版启动 → AutoMigrate 建列(全 NULL) → 按「未授权 = 仅 admin」规则,
+所有区域用户瞬间查不到任何指标 → 直到 UPDATE 执行完才恢复
+```
+
+故先于部署手工加列并赋值。旧版二进制不认识这一列，加了完全无感。
+
+### 变更内容
+
+```sql
+ALTER TABLE datasource
+  ADD COLUMN busi_group_ids varchar(1024) NULL
+  COMMENT "authorized busi group ids as json array, empty means admin only";
+
+UPDATE datasource SET busi_group_ids = "[6]" WHERE id = 1;   -- VM-1 → YJ
+-- ES-1 保持 NULL = 仅 admin
+```
+
+列定义与 `models/migrate/migrate.go` 的 `Datasource.BusiGroupIds` 逐字一致，
+新版启动时 `AutoMigrate` 认为列已存在，是 no-op。
+
+**授权依据**：当前 371 个监控实例全部由 `yjcollect2.13-10.185.2.13` 采集，
+该机归 `YJ`（id=6），所以 VM-1 里的数据都属于 YJ。将来按区域拆 VM 时，
+每个新数据源关联对应区域组；总部汇聚 VM 留 NULL 即自动私有。
+
+### 变更后验证
+
+```
+Field           Type            Null  Default
+busi_group_ids  varchar(1024)   YES   NULL
+
+id  name  plugin_type    busi_group_ids
+ 1  VM-1  prometheus     [6]
+ 2  ES-1  elasticsearch  (NULL = 仅 admin)
+```
+
+现网未受影响：`count(up)` = 61，告警引擎心跳正常（00:35:26），
+`docker logs o9e` 中涉及新列的错误 **0 条**。
+
+### 回滚方法
+
+```sql
+ALTER TABLE datasource DROP COLUMN busi_group_ids;
+```
+
+注意：回滚列之后必须同时回滚代码，否则新版 `AutoMigrate` 会再把列建回来（全 NULL），
+反而造成区域用户全部查不到指标。
+
+### 遗留项
+
+**代码部署后需验证**（临时账号法，见前文）：
+
+| 检查项 | test-yj | test-bj |
+|---|---|---|
+| `POST /datasource/list` | 仅 VM-1 | 空 |
+| `GET /proxy/1/api/v1/query?query=count(up)` | 200 | **403**（此前 200/61） |
+| `GET /proxy/2/*`（ES-1） | 403 | 403 |
+| `GET /cfgsync/instances` | 371 | **0**（此前两者都是 371） |
+
+回归项：admin 的看板、即时查询、22 条告警规则求值正常；`count(up)` 在 admin 下仍为 61。
+
+**一个待观察点**：`busi_group_ids` 为 NULL 时 GORM 的 json serializer 走
+「dbValue 为 nil → 零值」分支，是安全的；但若有任何路径写入空字符串 `''`，
+`json.Unmarshal([]byte(""))` 会报错。`models/` 下已有 7 处同样的 `serializer:json`
+用法在生产跑着（`alert_rule.NotifyRuleIds` 等），风险很低，部署后留意日志即可。
