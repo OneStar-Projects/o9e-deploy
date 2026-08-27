@@ -159,8 +159,10 @@ docker restart o9e
 **① 需人工验证的页面**
 
 本次变更后，未登录的取数调用会返回 401。**唯一已知的高频调用方是业务墙页面 `/biz-wall`**
-（本地开发前端 localhost:28765）。需要在浏览器中确认它带登录态、能正常出数。
-若 401，应修前端使其携带 session，而不是重新打开本开关。
+（本地开发前端 localhost:28765）。
+
+> **2026-08-27 已验证：业务墙正常出数**，说明该页面携带登录态，不依赖匿名通道。
+> 本项关闭。
 
 **② 三个不受开关控制的裸路由（仍然完全开放，需改代码）**
 
@@ -182,3 +184,68 @@ docker restart o9e
 **④ 本地仓库同步**
 
 服务器已改，本地仓库需提交同样变更以避免漂移。
+> 已完成：commit `bae2ae3`，两边文件内容（含注释）已对齐。
+
+---
+
+## 2026-08-27　区域业务组资源归属（测试样本）
+
+### 背景
+
+区域业务组框架已由人工建好（BJ / TJ / YJ / ZJ 四组，各配同名用户组，`perm_flag = rw`），
+但四个组**零资源**，无法验证隔离效果。本次挑三台机器分别归入三个区域，
+留 ZJ 为空组，用于后续实测下列行为：
+
+- 区域用户能否只看到本区域机器
+- **未归组机器是否对所有用户可见**（`router_target.go:82-87` 的 `bgids = append(bgids, 0)`）
+- 空业务组用户会看到什么
+
+### 变更前状态
+
+```
+业务组             机器  告警规则  看板
+Default Busi Group   0      0       9
+资源清单             0     22      10
+network              1      0       0
+BJ / TJ / YJ / ZJ    0      0       0
+未归组机器：12 台
+```
+
+### 变更内容
+
+```sql
+INSERT IGNORE INTO target_busi_group (target_ident, group_id, update_at) VALUES
+  ('YJ-IMC-1', 4, UNIX_TIMESTAMP()),   -- → BJ
+  ('YJ-IMC-2', 5, UNIX_TIMESTAMP()),   -- → TJ
+  ('YJ-IMC-3', 6, UNIX_TIMESTAMP());   -- → YJ
+```
+
+直接写库而非走 API：该表的过滤在查询期做 SQL join，无需等缓存刷新。
+表有唯一键 `(target_ident, group_id)`，用 `INSERT IGNORE` 保证幂等。
+
+### 变更后验证
+
+```
+id  name                targets                    cnt
+ 3  network             yjcollect2.13-10.185.2.13    1
+ 4  BJ                  YJ-IMC-1                     1
+ 5  TJ                  YJ-IMC-2                     1
+ 6  YJ                  YJ-IMC-3                     1
+ 7  ZJ                  (空)                         0
+仍未归组：9 台
+```
+
+三台机器均为 windows / categraf v0.5.13 / 10.185.2.x：
+`YJ-IMC-1` = 10.185.2.1，`YJ-IMC-2` = 10.185.2.2，`YJ-IMC-3` = 10.185.2.3。
+
+### 回滚方法
+
+```sql
+DELETE FROM target_busi_group WHERE target_ident IN ('YJ-IMC-1','YJ-IMC-2','YJ-IMC-3');
+```
+
+### 遗留项
+
+- 仍有 **9 台机器未归组**，按"未归组 = 对所有人可见"的语义，它们对任何登录用户都可见。
+  正式启用区域隔离前必须全部归组，且需要新机器上线时的归组流程或代码兜底。
+- 22 条告警规则仍全部挂在"资源清单"组，19 个看板在 Default / 资源清单，均未按区域拆分。
