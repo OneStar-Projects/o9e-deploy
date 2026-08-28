@@ -931,12 +931,25 @@ PUT**。这是不该做的 —— 写接口的 admin 成功路径不属于权限
 已 `DELETE FROM cfgsync_main_config_template WHERE update_by='test-adm'`，表回到 0 行。
 复核：绑定总数仍 372、无孤儿成员、无残留账号。
 
-### 由此暴露的一个真实风险（未修）
+### 由此暴露的一个真实风险（已修）
 
 `PUT /main-config/:agent_type` **不校验 content 非空**，空 body 会静默写入空模板。
 现在无害，但 **Phase 2.5 把主配置接进下发链路之后，这一个请求会把所有 categraf 的
-主配置清空**。接入前应当加：content 为空时拒绝，或至少保留上一版（该表有 `revision`
-字段但目前只存最新版、无历史，回滚无源）。
+主配置清空**，且该表只存最新版（`agent_type` 唯一键）、无历史，**回滚无源**。
+
+修法：保存前用渲染器现成的 `render.Compile()` 编译一遍（`router_cfgsync.go`
+`cfgsyncMainConfigPut`，`ginx.BindJSON` 之后）。不自己写校验，是为了让保存时的判据和
+渲染时**完全一致**，不会出现"存得进去、下发时才炸"。一次挡掉三类：
+
+| 输入 | 结果 |
+|---|---|
+| 空内容 | 400 `render.tmpl 内容为空` |
+| 模板语法错（未闭合引号等） | 400 `template: ...: unterminated quoted string` |
+| 沙箱白名单外的函数 | 400 `function "xxx" not defined` |
+| 正常 toml / 带 `{{ .ident }}` 的 toml | 通过 |
+
+未做**历史版本表**：那是跟 Phase 2.5 下发接入一起设计更合适的功能，现在单独加会
+先有一张没人读的表。
 
 ### 测试方法的教训
 
