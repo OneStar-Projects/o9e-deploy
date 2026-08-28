@@ -956,3 +956,74 @@ PUT**。这是不该做的 —— 写接口的 admin 成功路径不属于权限
 **测写接口时，只测「应当被拒」的路径，不测 admin 的成功路径。**
 成功路径会真的改生产数据，而权限验证根本不需要它 —— 403 与否才是被测对象。
 本次是空 body 撞上"不存在就创建"的逻辑，恰好落在无害的表上，是运气不是设计。
+
+---
+
+## 2026-08-28　机器归属清理 + 指标层区域隔离方案确定
+
+### 清理：YJ-IMC-1 / YJ-IMC-2 移回 YJ 组
+
+`target_busi_group.update_at` 显示这两条绑定建于 **2026-08-27 20:58:06**，与 YJ-IMC-3
+（同一秒、归 YJ）是同一批操作 —— 即隔离改造当天为了验证「BJ 用户只看得到 BJ 机器」
+而人为把三台同批机器（10.185.2.1/2/3，windows，同 agent 版本）拆到三个组。
+不是真实业务归属。
+
+```sql
+update target_busi_group set group_id=6, update_at=unix_timestamp()
+where target_ident in ('YJ-IMC-1','YJ-IMC-2') and group_id in (4,5);
+-- 回滚：group_id 分别改回 4 / 5
+```
+
+改后各组机器数：YJ 13、BJ/TJ/ZJ/资源清单/Default/_待分配 均 0。
+
+告警影响为零：n9e 的 `alert_rule.group_id` 是「规则归属哪个业务组」，目标由 PromQL
+决定，与机器归属无关。
+
+**顺带发现**：VM 里还有 `TEST-UNASSIGNED-PROBE` 的序列（8/27 测 `_待分配` 自动归组
+用的探针）。target 行已删，时序数据等 retention 自然过期，不处理。
+
+### 由此暴露的问题：两层隔离的粒度不一致
+
+隔离实际上是两套独立过滤：
+
+| 层 | 依据 | 结果 |
+|---|---|---|
+| 资源列表层 | `target_busi_group` | BJ 用户能看到归在 BJ 组的机器 |
+| 指标数据层 | `datasource.busi_group_ids` | VM-1 只授权 `[6]`(YJ)，BJ 用户查它 403 |
+
+清理前的 `YJ-IMC-1` 就是活样本：BJ 用户**看得见机器、所有图都是空的**。
+
+更根本的是 **VM-1 是全量库，数据源授权粒度只到「整个数据源」** ——
+授权给 YJ 等于 YJ 能查全平台指标。今天恰好无害（3 台采集机全在 YJ，库里 100% 是
+YJ 数据，「YJ 看全部」== 「YJ 看 YJ」），**但接入第二个区域的那一刻就破**。
+
+### 方案：categraf 打 region 标签 + 查询侧注入
+
+调研确认的三个事实：
+
+1. **VM 里 100% 数据都经过 categraf** —— deepflow 指标在 ClickHouse 不在 VM
+   （`{auto_service_id!=""}` 空结果）；k8s 联邦指标带 `ident=COSLOS-147`，
+   走的是 categraf 的 prometheus 插件。**没有绕过 global labels 的旁路。**
+2. **现成的 `area` 标签不能用** —— 只覆盖 20 个 `snmp_*` 指标（网络设备），
+   值域是 泉州/燕郊/舟山，与业务组不对应。`agent_host` 同样只在 snmp 上。
+3. n9e 已依赖 `prometheus/promql/parser` 和 `VictoriaMetrics/metricsql`
+   （`pkg/promql/parser.go`），但现有代码只**读** selector，没有改写先例。
+   后端是 VM，注入应该用 `metricsql`，否则用户手写的 MetricsQL 扩展语法会解析失败。
+
+设计：
+
+- **采集侧**：categraf `[global.labels]` 加 `region = "YJ"`。
+  短期手工改 3 台采集机；长期走 cfgsync 主配置模板 `region = "{{ .region }}"`，
+  渲染时按 host 所属业务组注入 —— 这正是主配置模板存在的意义，Phase 2.5 接上即自动。
+- **存储**：`busi_group` 加 `region varchar(64)` 可空。区域组填 YJ/BJ/TJ/ZJ，
+  用途组（`资源清单` / `_待分配`）留空。**不直接用业务组名** —— 组名可改可增，
+  而 region 一旦写进时序库就不可改，两者生命周期不同必须解耦。
+- **查询侧**：解析 → 遍历 AST 给每个 selector 追加 `region=~"YJ|BJ"` → 重新序列化。
+  admin 不注入；用户 region 集合为空直接拒。
+- **历史数据**：接受断层。改造前的数据区域用户查不到，等 retention 过期。
+  不开 `region=~"YJ|"` 的空值后门 —— 那是个会持续到 retention 结束的真洞。
+  代价仅为 YJ 用户看不到改造前的历史，admin 不受影响。
+
+**易漏点**：`dsProxy` 是通用代理，还转发 `/api/v1/label/*/values`、`/api/v1/series`、
+`/api/v1/labels`。这些必须同样注入 `match[]`，否则区域用户能直接枚举出别的区域的
+机器名 —— 漏了等于前面全白做。
