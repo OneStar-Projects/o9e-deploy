@@ -680,3 +680,176 @@ UPDATE alert_rule SET group_id = ?, update_at = UNIX_TIMESTAMP() WHERE ...;
 - **前端「授权业务组」字段尚未人工验证** —— 后端行为已确认，但管理员在数据源
   编辑页能否正常选择和保存，需要在界面上实际点一遍。
 - `busi_group_ids` 为 NULL 走 GORM json serializer 的零值分支，已在生产验证无异常。
+
+---
+
+## 2026-08-28　大屏 / 看板 / 告警详情 / 业务服务隔离部署验证
+
+### 部署
+
+```
+镜像       fuqiangleon/o9e:latest  c066c3c47e77
+容器启动   2026-08-28 17:19:10
+代码       feat/cfgsync-mvp @ 2418f870（4 个 commit：0066bc4a / 7c5d9961 / abdc0b41 / 2418f870）
+```
+
+**部署确认踩了个坑**：第一次检查时容器还是 16 小时前的镜像（`e0a53cdae773`，
+启动于 00:58），行为侧 `/event-notify-records/1` 未登录仍返回 200。
+**判断代码是否真上线，看容器启动时间比看 commit 时间可靠** ——
+推送成功不等于部署完成。重新部署后 `c066c3c47e77` 才带上本批改动。
+
+### 验证方法
+
+沿用临时账号法，这次建三个（测后全删，残留检查 0）：
+
+| 账号 | 角色 | 用户组 | 对应业务组 |
+|---|---|---|---|
+| `test-bj` | Standard | BJ(2) | BJ(4)，含 1 台机器 |
+| `test-yj` | Standard | YJ(4) | YJ(6)，含 11 台机器 |
+| `test-adm` | **Admin** | — | 全部（用于回归对照） |
+
+密码同上次 `TestBJ@2026tmp`，salt 未变（`856bd2e1…`），hash 沿用
+`e40c48e00c2e1a94a92715e08218d6dd`。
+
+> 建 `test-adm` 而不是登录 `admin`，是为了不碰生产管理员口令；
+> 回归对照必须有 admin 视角，否则只能证明"看得少了"，证明不了"该看的还在"。
+
+### 结果 1：大屏收敛
+
+`GET /screen/busi-group-status`
+
+| | 改动前 | 现在 |
+|---|---|---|
+| test-bj | 7 个业务组（含 BJ/TJ/YJ/ZJ 全部） | **1 个（BJ）** |
+| test-yj | 7 个 | **1 个（YJ）** |
+| test-adm | 7 个 | 6 个（全部，正确） |
+
+`GET /screen/overview`
+
+| 指标 | test-bj | test-yj | test-adm |
+|---|---|---|---|
+| 机器 total | 1 | 11 | **13** |
+| 告警 p1 | 0 | 53 | 53 |
+| 告警 rule_total | 0 | 21 | **22** |
+| 数据源 total | 0 | 1 | **2** |
+| 业务组 total | 1 | 1 | **6** |
+| 看板 total / public | 0 / 10 | 0 / 10 | **19** / 10 |
+| **用户 total** | **0** | **0** | **5** |
+| **event_pipeline** | **全 0** | **全 0** | 全 0（表本就空） |
+| no_busi_group | 0 | 0 | 0 |
+
+用户 / 用户组 / 角色 / 管道 / 通知这几项对非 admin 直接返回 0 ——
+`users`、`event_pipeline`、`notification_record` 三张表**没有任何业务组维度**，
+过滤不了，只能整块隐藏。admin 侧数值完整，说明没误伤全局视图。
+
+### 结果 2：看板批量读
+
+`GET /boards?bids=`（board 10~23 属 Default Busi Group 且 `public=0`，
+board 1~13 属"资源清单"且 `public=1`）
+
+| 请求 | test-bj | test-yj | test-adm |
+|---|---|---|---|
+| `bids=22,23,17`（别组 private） | **0**（原 3 个） | **0** | 3 |
+| `bids=1,2`（public） | 2 | 2 | 2 |
+
+public 看板仍可读 —— 确认没有过度收紧。
+
+### 结果 3：三个原本裸奔的路由
+
+事件 171805 属 group 6(YJ)；规则 3 属 group 6，规则 1 属 group 2(资源清单)。
+
+| 端点 | 无 token | test-bj | test-yj | test-adm |
+|---|---|---|---|---|
+| `/event-notify-records/171805` | **401**（原 200） | **403** | 200 | 200 |
+| `/alert-eval-detail/3` (group 6) | 401 | **403** | 200 | 200 |
+| `/alert-eval-detail/1` (group 2) | 401 | **403** | **403** | 200 |
+| `/event-detail/<32位hex>` | **401** | 500* | 500* | 500* |
+
+\* 500 是 hash 不存在导致 `getEventLogs` 报错，属原有行为，非本次引入。
+该接口按设计只要求登录、不做业务组判定（按 hash 查日志拿不到事件 id）。
+
+顺带确认上游原有的两个（`AnonymousAccess.AlertDetail=false` 后生效）：
+
+| `/alert-cur-event/171805` | 401 | **403** | 200 | 200 |
+| `/alert-his-event/146976` | 401 | **403** | **403** | 200 |
+
+> 排查中一度以为 `/alert-cur-events/171805`（复数）无鉴权全返回 200，
+> 实际是**路径写错**落到了前端 SPA fallback，返回的是 HTML。
+> 真实路由是单数 `/alert-cur-event/:eid`。测 API 时若拿到 HTML，先怀疑路径。
+
+### 结果 4：新机器自动进「待分配」组（唯一改了写路径的改动）
+
+**触发路径要点**：`GetHeartbeatFromMetric` 默认 false（现场未配置），
+所以**推指标不会注册机器**，最初用 `/opentsdb/put` 探测毫无反应。
+真实注册路径是 `POST /v1/n9e/heartbeat`（categraf agent 心跳），
+它调 `identSet.MSet` → `UpdateTargets` → `BindTargetsToUnassigned`。
+
+用一台假机器实测：
+
+```bash
+curl -X POST http://127.0.0.1:17000/v1/n9e/heartbeat -H 'Content-Type: application/json' \
+  -d '{"hostname":"TEST-UNASSIGNED-PROBE","host_ip":"10.99.99.254","unixtime":<ms>}'
+```
+
+注册前基线：无 `_待分配` 业务组，未归组机器 **0** 台。
+
+心跳后 6 秒：
+
+```
+busi_group          id=8  name=_待分配  create_by=system      ← 自动创建
+target              TEST-UNASSIGNED-PROBE                     ← 注册成功
+target_busi_group   TEST-UNASSIGNED-PROBE → 8                 ← 自动归组
+busi_group_member   业务组 8 关联用户组数 = 0                 ← 只有 admin 可见
+```
+
+可见性：
+
+| | test-bj | test-yj | test-adm |
+|---|---|---|---|
+| `GET /targets` total | 1 | 11 | **14**（13+探针） |
+| 列表含 PROBE | 否 | 否 | **是** |
+
+探针机器测后已删除（`target` + `target_busi_group` 各 1 行），
+**`_待分配` 业务组 id=8 保留** —— 这是正常产物，后续新机器都会落进来。
+
+### 结果 5：业务服务（biz_systems）
+
+表原为空，造两条样本验证（测后已删）：`probe-yj`(group 6)、`probe-orphan`(group 0)。
+
+`group_id` 列迁移成功：`bigint NOT NULL DEFAULT 0`，带索引。
+
+| 操作 | test-bj | test-yj | test-adm |
+|---|---|---|---|
+| `GET /biz-systems` | `[]` | `[probe-yj]` | `[probe-yj, probe-orphan]` |
+| `PUT /biz-systems/1`（group 6） | **403** | 200 | 200 |
+| `PUT /biz-systems/2`（group 0，未归组） | **403** | **403** | 200 |
+| `POST` 不带 group_id | — | **400** `group_id is required` | — |
+| `POST` 到别人组（group_id=4） | — | **403** | — |
+
+未归组（`group_id=0`）只有 admin 可见可改 —— 与数据源同语义，
+与 target 的「未归组对所有人可见」**相反**，这是有意的。
+
+### 回归（确认没改坏）
+
+| 检查 | 结果 |
+|---|---|
+| 数据源列表 | bj `[]` / yj `[VM-1]` / admin `[ES-1, VM-1]` |
+| `/proxy/1` `count(up)` | bj **403** / yj 200 值 61 / admin 200 值 61 |
+| `/cfgsync/instances` | bj 0 / yj 371 / admin 371 |
+| 告警引擎心跳 | 三行均刷新至 19:15:25 |
+| 当前告警 | 57 条，全部 group_id=6 |
+| 指标写入新鲜度 | 0.20 秒 |
+
+### 回滚方法
+
+回滚镜像到 `e0a53cdae773` 即可（本批无数据库结构变更之外的破坏性操作）。
+`biz_systems.group_id` 列保留无害（默认 0）；`_待分配` 业务组删掉即可，
+删后新机器退回"未归组 = 对所有登录用户可见"的旧行为。
+
+### 遗留项
+
+- **前端「授权业务组」字段仍未人工验证** —— 后端已两轮确认，界面未点过。
+  这是唯一一个跨了两次部署都没消掉的遗留项。
+- `_待分配` 组目前只在有新机器时才被创建（惰性）。已建出 id=8，后续不再触发建组逻辑。
+- 大屏的用户/管道/通知三项对非 admin 直接归零，是**隐藏**而非过滤。
+  若将来区域需要看自己的通知记录，得先给 `notification_record` 加业务组维度。
