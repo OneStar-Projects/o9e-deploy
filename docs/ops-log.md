@@ -609,3 +609,74 @@ ALTER TABLE datasource DROP COLUMN busi_group_ids;
 「dbValue 为 nil → 零值」分支，是安全的；但若有任何路径写入空字符串 `''`，
 `json.Unmarshal([]byte(""))` 会报错。`models/` 下已有 7 处同样的 `serializer:json`
 用法在生产跑着（`alert_rule.NotifyRuleIds` 等），风险很低，部署后留意日志即可。
+
+---
+
+## 2026-08-28　数据源授权 + cfgsync 隔离部署验证
+
+### 部署
+
+n9e `feat/cfgsync-mvp` 推送触发 Jenkins 构建，容器于 `2026-08-28T00:58:18Z` 起新镜像。
+`AutoMigrate` 对 `busi_group_ids` 无报错（列已由前一条迁移建好，是 no-op），
+列值保持 `VM-1 → [6]`、`ES-1 → NULL`。
+
+### 验证（临时账号 test-yj / test-bj，测后已删除，残留检查 0）
+
+| 检查项 | test-yj (YJ 组) | test-bj (BJ 组) |
+|---|---|---|
+| `POST /datasource/list` | `["VM-1"]` | `[]` |
+| `GET /datasource/brief` | `["VM-1"]` | `[]` |
+| `GET /proxy/1` (VM-1) | **200** | **403** |
+| `GET /proxy/2` (ES-1) | **403** | **403** |
+| `POST /query-instant-batch` ds=2 | **403** | **403** |
+| `GET /cfgsync/instances` | 371 | **0** |
+| `GET /targets` | 11 台 | 1 台 |
+| `GET /alert-cur-events/list` | 55 条 | 0 条 |
+| `GET /busi-groups` | `["YJ"]` | `["BJ"]` |
+
+对比改造前：`test-bj` 的 `proxy/1 count(up)` 从 **200/61** 变为 **403**，
+`cfgsync/instances` 从 **371** 变为 **0**，`datasource/list` 从全部可见变为空。
+
+`test-yj` 能查 VM-1 但查不了 ES-1（后者 NULL = 仅 admin），
+说明授权是**按数据源逐个生效**的，不是"有权限就全放开"。
+
+### 回归
+
+```
+告警引擎心跳     三行均刷新至 09:00:21
+指标写入新鲜度   0.32 秒
+当前告警         57 条,全部 group_id=6
+```
+
+### 过程中发现并修复:告警规则缓存陈旧
+
+部署后一度出现「规则在 group 6,但事件的 group_id 是 2」的不一致。按时间切分后清楚：
+
+```
+事件组 6   49 条   最新 09:01:05   ← 重启后新产生,正确
+事件组 2    6 条   最新 08:57:45   ← 重启前残留
+```
+
+**根因**：2026-08-27 那次直接 `UPDATE alert_rule SET group_id` 改库时**没有同时
+更新 `update_at`**。告警规则缓存和数据源缓存一样有 stat 门（count + max(update_at)），
+运行中的引擎因此一直用着 `group_id=2` 的旧规则，新产生的事件继续打成 2。
+本次部署重启后缓存重载，事件立刻转为 6。
+
+已把残留的 6 条同步过来，现在 57 条全部在 group 6。
+
+**这是一条通用教训**：n9e 的 memsto 缓存普遍用「count + max(update_at)」判断是否重载，
+**任何绕过 API 直接改库的操作，都必须同时 touch 该表的 `update_at`，否则改动要等到
+下次重启才生效**。数据源授权当初选 JSON 列而不是关联表，正是为了规避这一点；
+告警规则这次踩到了。
+
+后续所有直接改库的运维操作，SQL 里都应带上：
+
+```sql
+UPDATE alert_rule SET group_id = ?, update_at = UNIX_TIMESTAMP() WHERE ...;
+```
+
+### 遗留项
+
+- **前端「授权业务组」字段尚未人工验证** —— 后端行为已确认，但管理员在数据源
+  编辑页能否正常选择和保存，需要在界面上实际点一遍。
+- `busi_group_ids` 为 NULL 走 GORM json serializer 的零值分支，已在生产验证无异常。
