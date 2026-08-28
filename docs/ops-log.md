@@ -853,3 +853,93 @@ busi_group_member   业务组 8 关联用户组数 = 0                 ← 只�
 - `_待分配` 组目前只在有新机器时才被创建（惰性）。已建出 id=8，后续不再触发建组逻辑。
 - 大屏的用户/管道/通知三项对非 admin 直接归零，是**隐藏**而非过滤。
   若将来区域需要看自己的通知记录，得先给 `notification_record` 加业务组维度。
+
+---
+
+## 2026-08-28　cfgsync 绑定权限补测
+
+### 背景
+
+上一轮部署验证只测了 `/cfgsync/instances` 的列表过滤，**主机下拉和绑定接口没单独验**。
+这两个是「区域用户绑定时只能看到自己的 host」的直接实现，补测。
+
+临时账号同前（`test-bj` / `test-yj` / `test-adm`），测后已删，残留检查 0。
+
+### 基线
+
+| 业务组 | 机器 | 其中 cfgsync 采集机 |
+|---|---|---|
+| BJ(4) | 1 台 `YJ-IMC-1` | **0**（该机不是采集机） |
+| YJ(6) | 11 台 | 8 台在 `cfgsync_host_token` |
+
+绑定分布：`yjcollect2.13` 370 条、`COSLOS-147` 1 条、`ecs-wlxxjk…215` 1 条，共 372。
+
+### 结果：主机下拉
+
+`GET /cfgsync/hosts`
+
+| test-bj | test-yj | test-adm |
+|---|---|---|
+| **0 台** | 8 台 | 8 台 |
+
+test-bj 为空是正确的 —— BJ 组唯一那台机器不是采集机。
+
+### 结果：越权绑定/解绑
+
+test-bj 打 YJ 的采集机 `yjcollect2.13-10.185.2.13`、实例 3(`docker-hub`)：
+
+```
+POST   /cfgsync/bindings → 403  无权访问采集机 yjcollect2.13-10.185.2.13
+DELETE /cfgsync/bindings → 403  无权访问采集机 yjcollect2.13-10.185.2.13
+```
+
+`cfgsyncCheckBindScope` 是**双向**校验（主机可见 + 实例有权）。少任何一边都是洞：
+只校验主机 → 能把别区域的实例绑到自己机器上读它的配置（含 secret_refs）；
+只校验实例 → 能把自己的实例绑到别区域采集机上污染对方采集配置。
+
+### 结果：越权读
+
+| 端点 | bj | yj | admin |
+|---|---|---|---|
+| `/cfgsync/bindings/host/<YJ采集机>` | **403** | 200 | 200 |
+| `/cfgsync/bindings/instance/3` | **403** | 200 | 200 |
+| `/cfgsync/instances/3` | **403** | 200 | 200 |
+| `/cfgsync/host-state/<YJ采集机>` | **403** | 200 | 200 |
+| `/cfgsync/preview/host/<YJ采集机>` | **403** | 200 | 200 |
+| `/cfgsync/main-config/categraf` | **403** | **403** | 200 |
+| `/cfgsync/secrets` | **403** | **403** | 200 |
+| `/cfgsync/host-states`（列表） | 200 / **0 条** | 200 / 8 条 | 200 / 8 条 |
+| `/cfgsync/instances`（列表） | 200 / **0 条** | 200 / 371 条 | 200 / 371 条 |
+
+列表类接口返回 200 但内容为空，详情类直接 403 —— 符合设计。
+
+### 过程中的操作失误：误建空的主配置模板
+
+测 `PUT /cfgsync/main-config/categraf` 时，为了凑齐三列对照，**对 admin 也发了空 body 的
+PUT**。这是不该做的 —— 写接口的 admin 成功路径不属于权限验证范围。
+
+结果在 `cfgsync_main_config_template` 建出一行 `agent_type=categraf, content=''`。
+
+**实际影响为零**，两个独立原因：
+
+1. 该行 `create_at == update_at == 20:48:28`（即操作时刻）、`revision=1` ——
+   是**新建**而非覆盖，表原本 0 行，没有内容被破坏。
+2. `bundle.go:112` 注释明确：**主配置 config.toml 尚未接入下发链路**（留 Phase 2.5）。
+   全仓库只有 router 的 GET/PUT 引用该表，bundle 生成不读它。托管机上的
+   `/run/categraf/conf/config.toml` 是 install.sh 放的静态文件，与该表无关。
+
+已 `DELETE FROM cfgsync_main_config_template WHERE update_by='test-adm'`，表回到 0 行。
+复核：绑定总数仍 372、无孤儿成员、无残留账号。
+
+### 由此暴露的一个真实风险（未修）
+
+`PUT /main-config/:agent_type` **不校验 content 非空**，空 body 会静默写入空模板。
+现在无害，但 **Phase 2.5 把主配置接进下发链路之后，这一个请求会把所有 categraf 的
+主配置清空**。接入前应当加：content 为空时拒绝，或至少保留上一版（该表有 `revision`
+字段但目前只存最新版、无历史，回滚无源）。
+
+### 测试方法的教训
+
+**测写接口时，只测「应当被拒」的路径，不测 admin 的成功路径。**
+成功路径会真的改生产数据，而权限验证根本不需要它 —— 403 与否才是被测对象。
+本次是空 body 撞上"不存在就创建"的逻辑，恰好落在无害的表上，是运气不是设计。
