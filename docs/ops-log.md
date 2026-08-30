@@ -411,6 +411,10 @@ DELETE FROM target_busi_group WHERE target_ident IN (...);
 - **C 建一个 `_未分配` 业务组，target 注册时自动归入，只授权管理员组** —— 推荐。
   未归组集合恒为空，新机器不丢失，区域用户看不到尚未确定归属的机器
 
+> **更正（08-30）**：C 已落地，但组名是 **`_待分配`**（不是 `_未分配`）。
+> 现场未归组机器数为 0。注意 `EnsureUnassignedBusiGroup` 是**按组名**找组的，
+> 在 UI 里重命名这个组会静默再建一个重名组，老组里的机器就此滞留。
+
 ### 剩余改造项优先级
 
 ```
@@ -420,6 +424,11 @@ DELETE FROM target_busi_group WHERE target_ident IN (...);
 4. boardGetsByBids 补权限                                   ~0.5 天
 5. target 增量兜底(方案 C)                                  ~0.5 天
 ```
+
+> **更正（08-30）**：这 5 项**已全部完成**。另外 08-30 的全量审计又挖出 12 个
+> 同类越权（`bgrw()` 只锁 URL 的 `:id`、不看 body 里的 `ids[]`），
+> 含一个零判权的 `POST /alert-cur-events/card/details`，已一并修完。
+> 见本文件 08-30 条目第二节。
 
 ---
 
@@ -527,12 +536,23 @@ UPDATE alert_cur_event e JOIN alert_rule r ON r.id = e.rule_id SET e.group_id = 
 **`region` 比 `ident` 更适合做这个过滤**：一个区域可能有多台采集机，
 用 `ident` 得写 `{ident=~"a|b|c"}`，加机器就要改规则；用 `region` 则新采集机自动纳入。
 
+> **更正（08-30）**：上面这段结论反了，最终走的是 ident。
+> 反对 ident 的理由是「加机器就要改规则」——那只在**人手写死** regex 时成立。
+> 实际实现是**查询时从 `target_busi_group` 现算** ident 集合，新采集机一进组就
+> 自动纳入，规则本身不含 ident。这条反对意见因此不成立，而 region 标签那边的代价
+> （改 13 台采集机、序列全断、历史不可见）是实打实的。详见 08-30 条目第一节。
+
 **② `alert-1` 的归属待定**，取决于正式区域划分和主机的真实分布。
 
 **③ 一个语义提醒**：区域用户看到的告警数量取决于「规则挂在哪个组」，
 而不是「告警对象属于哪个区域」。若将来出现"A 区域的规则监控了 B 区域的设备"，
 告警会归 A，隔离就错位了。规则的 PromQL 过滤范围必须和它所在的业务组一致——
 这条没有任何机制强制，只能靠规范。
+
+> **更正（08-30）**：③ 不只是「靠规范」的问题，它是**指标层隔离的一个可达绕过**。
+> `Standard` 角色持有 `/alert-rules/{add,put,del}`，区域用户能建一条查别的区域指标
+> 的规则，再从告警内容里把数据读出来。求值时没有用户上下文，注入不到那一层。
+> 处置方案 A/B 见 `design-multi-region.md` §10。
 
 ---
 
@@ -999,6 +1019,19 @@ YJ 数据，「YJ 看全部」== 「YJ 看 YJ」），**但接入第二个区域
 
 ### 方案：categraf 打 region 标签 + 查询侧注入
 
+> ⚠️ **本节的「方案」已于 2026-08-30 作废，别照着做。**
+> region 标签这条路在上线前预检里被判定不划算（要改 13 台采集机跨两套部署方式、
+> 序列 identity 全变、**区域用户永久看不到切换点之前的历史**、漏配一台静默丢数据），
+> 已改为 **按用户可见的 ident 集合注入**：`MyBusiGroupIds` → `target_busi_group`
+> → ident 列表 → `ident=~"a|b|…"`，采集侧零改动。见本文件 2026-08-30 条目第一节。
+>
+> **下面「调研确认的三个事实」仍然有效**（100% 数据经过 categraf、`area` 标签不可用、
+> 注入必须用 metricsql 而非 promql parser），只有「设计」往下的部分作废。
+>
+> 另有一处语义**反转**了：本节设计的是「先剔掉用户写的 region filter 再注入」，
+> 搬到 ident 上必须改成**纯追加**——用户写 `up{ident="host-a"}` 想看一台机器，
+> 剔掉后会被放大成他名下的全部机器，那是错误结果，不是泄露。
+
 调研确认的三个事实：
 
 1. **VM 里 100% 数据都经过 categraf** —— deepflow 指标在 ClickHouse 不在 VM
@@ -1024,6 +1057,160 @@ YJ 数据，「YJ 看全部」== 「YJ 看 YJ」），**但接入第二个区域
   不开 `region=~"YJ|"` 的空值后门 —— 那是个会持续到 retention 结束的真洞。
   代价仅为 YJ 用户看不到改造前的历史，admin 不受影响。
 
+> **更正（08-30）**：最后这条**做了相反的决定，必须知道。**
+> ident 方案下无 ident 的序列（DeepFlow 全部如此）注入后会整体消失，
+> 所以加了 `Center.RegionIsolation.AllowIdentlessSeries`，开启时往 ident 集合
+> 追加一个空串，拼出 `ident=~"host-a|"` —— **正是这里说的空值后门**。
+> 区别在于：region 版开它是为了保历史（洞会持续到 retention 结束），
+> ident 版开它是为了保 DeepFlow 页面（现场必须开，否则那些页面对区域用户全空）。
+> 它是**全放行**不是按区域放行，**接入第二个区域前必须改回 false**。
+> 「历史断层」这条代价本身则已消失——ident 方案不改数据，历史照常可见。
+
 **易漏点**：`dsProxy` 是通用代理，还转发 `/api/v1/label/*/values`、`/api/v1/series`、
 `/api/v1/labels`。这些必须同样注入 `match[]`，否则区域用户能直接枚举出别的区域的
 机器名 —— 漏了等于前面全白做。
+
+---
+
+## 2026-08-30　跨模块业务组隔离审计 + 指标层机制改为 ident 注入
+
+### 一、更正 8/28 的指标层方案：region 标签 → ident 集合注入
+
+**8/28 记的 region 方案已废弃**，不要照那条执行。上线前把代价逐条摊开后判定不划算：
+
+- 要逐台改 13 台采集机（8 台走 cfgsync + 3 台 windows 手工 + 2 台已死），跨两套部署方式
+- 加 global label 会改变**所有**时间序列的 identity，VM 当成全新序列：
+  存储短期近似翻倍、所有 `rate()` 在切换点断一次
+- 开关打开后区域用户**永久看不到切换点之前的历史**
+- 漏配一台 = 那台的指标对区域用户直接消失，且不报错
+
+改成 `MyBusiGroupIds` → `target_busi_group` → 该用户可见的机器 ident 列表 →
+注入 `ident=~"host-a|host-b|…"`。上面四条代价全部归零：数据侧零改动、零序列变更、
+历史可见、无漏配面。且与资源列表层用的是**同一张表**，不会再出现 8/28 记的
+「看得见机器、图是空的」。
+
+两处语义反转，与 region 版不同，别搞混：
+
+1. **纯追加，不剔用户自写的 filter。** region 版是「先剔掉用户写的 region filter
+   再注入」。搬到 ident 上必须改掉：用户写 `up{ident="host-a"}` 想看一台机器，
+   剔掉后会被放大成他名下的**全部**机器 —— 那是错误结果，不是泄露。
+   纯追加后两个 filter 天然 AND 取交集。
+2. **`AllowIdentlessSeries` 是给 DeepFlow 留的临时门。** DeepFlow 的序列不带 ident，
+   注入后对区域用户全部消失。该开关往 ident 集合里追加一个空串，拼出
+   `ident=~"host-a|"`，PromQL 里标签缺失 == 标签值为空串，于是无 ident 的序列被放行。
+   这是**全放行**不是按区域放行，**接第二个区域前必须改回 false**。
+
+代价是粒度天花板：**`ident` 是采集者不是被监控资源**，SNMP / k8s 联邦 / 代理采集
+出来的序列全部塌到那台采集机的 ident 上。部署约束因此变成一条：
+**每个区域用自己的采集机，沿组织边界最细粒度拆。**
+
+配置项名 `Center.RegionIsolation` 与文件名 `router_region.go` 故意保留 —— 对外的
+功能名还是「区域隔离」，且改名会让现场 config.toml 里已有的配置段**静默失效**
+（TOML 反序列化不认的段直接丢，不报错）。
+
+### 二、跨模块越权审计与修复
+
+审计范围是业务组维度的全部资源：告警规则、记录规则、屏蔽、订阅、看板、自愈模板、
+机器、cfgsync。两批修复**均已提交，尚未 push，因此尚未部署、行为验证一次未跑**。
+
+反复出现的是同两个缺陷模式：
+
+1. 列表 / 详情端点漏挂 `bgro()`
+2. **`bgrw()` 只锁 URL 上的 `:id`，从不校验 body** —— 任何「路由 `:id` + body `ids[]`」
+   的端点都可绕过：在自己有权限的组下塞一个别组的 id 即可
+
+`5504860d` 补的六处读写：`/target/list` 追加业务组范围（5 条前端路径在用，
+是功能缺口不只是 API 洞）、`targetDel` 补 ident 校验、三条 `/busi-group/:id/` 路由
+补 `bgro()`/`bgrw()`、告警规则与记录规则与订阅的详情按记录自身 `group_id` 判权。
+
+`0d8b3b5f` 按 `idsForm`（body 带 `ids[]`）模式全量扫了 19 处，补完剩余的：
+
+| 端点 | 问题 |
+|---|---|
+| `POST /alert-cur-events/card/details` | **本轮最严重**。路由上只有 `auth()`、连 `user()` 都没有，body 给一批 event id 就返回完整事件（tags / annotations / 规则名）。event id 自增可枚举。同组的 `/card` 列表接口本就有 `GetBusinessGroupIds` 收窄，只有它漏了 |
+| `GET /trace-logs/:traceid` | 与 `eventDetailPage` 同类页面却无任何兜底 |
+| `POST /busi-groups/alert-rules/clones` | 只校验目标组，克隆别组规则即可读其数据源与查询语句 |
+| `alertMuteDel` / `alertSubscribeDel` | 删除不带 bgid 过滤 |
+| `alertMutePutFields` / `alertRulePutFields` / `recordingRulePutFields` | 批量改字段不校验归属 |
+| `alertSubscribePut` | 拿 body 里的 group_id 判权（调用方可控） |
+| `taskTplGet/Put/Del/BindTags/UnbindTags` | 五处均不校验归属 |
+| `GET /busi-group/:id/alert-mute/:amid` | 缺 nil 检查，500 而非 404 |
+| `PUT /recording-rule/:rrid` | 写操作挂在读权限点 `/recording-rules` 上 |
+
+新增 `bgidMatchCheck` 统一这类端点的判据（记录的 `group_id` 必须等于 URL 的 `:id`）。
+判据取「必须相等」而非「有权限即可」，与 `AlertRuleDels` 里既有的
+`param(busiGroupId) for protect` 口径一致；前端批量操作本就要先选中具体业务组，
+收严不影响正常路径。
+
+model 层 `AlertMuteDel` / `AlertSubscribeDel` 加可选 `bgid` 参数，照 `AlertRuleDels`
+的现成签名，两者各只有一个调用方，无波及面。
+
+**扫描结论**：端点级遗漏基本清了，剩下的是设计层面的缺口（见第四节）。
+`alert/` 与 `pushgw/` 两个目录未扫 —— 它们是后台任务、没有用户上下文，
+理论上不属于「用户越权」范畴，但该假设未验证。
+
+### 三、现场核实的事实（只读查询）
+
+```sql
+select id,name,plugin_type,busi_group_ids from datasource;
+select operation from role_operation where role_name='Standard' and operation like '%alert-rules%';
+select id,name from busi_group;  select id,group_id,name,public from board;
+```
+
+- **数据源只有两个**：`VM-1`(prometheus，授权 `[6]`=YJ)、`ES-1`(elasticsearch，
+  `busi_group_ids` 为 **NULL**)。**没有 Jaeger / VictoriaLogs 数据源。**
+- `CanAccessDatasource` 里 `len(BusiGroupIds)==0 → return false`，
+  即**空授权是代码强制拒绝**，不是靠配置习惯。ES-1 当前对所有非 admin 是 403。
+  ES 的真实风险因此不是「现在敞开」，而是「哪天给它授权了某个业务组，
+  那个组就能看 ES 全量」—— ES 没有查询注入这一层。
+- **Standard 角色持有 `/alert-rules/add`、`/alert-rules/put`、`/alert-rules/del`。**
+  区域用户能自建告警规则。这使第四节第一条从理论缺口变成可达路径。
+- 业务组 7 个：`_待分配`(8)、BJ(4)、TJ(5)、YJ(6)、ZJ(7)、资源清单(2)、
+  Default Busi Group(1)。
+- 看板 20 个。组 2「资源清单」下 10 个 `public=1`，全是通用模板
+  （主机 / MySQL / Oracle / Redis / Docker / 网络设备 / 机房动环等），
+  **泄露面是「有哪些监控模板」，不含业务数据** —— 数据走 VM-1，只授权组 6。
+  组 1 下 11 个 `public=0`。
+
+### 四、已知缺口与处理决策
+
+| 缺口 | 今天可利用 | 决策 |
+|---|---|---|
+| **告警规则的 PromQL 不注入**。求值在后台、无用户上下文，`isolationScope` 完全不参与。区域用户可建规则查别区域指标，从告警内容把数据读出来 | **是**（Standard 有 add/put/del） | **待定，见下** |
+| `AllowIdentlessSeries=true` 是全放行不是按区域放行 | 否（单区域） | 接第二区域前必须改 false，写进上线清单 |
+| `ident` 是采集者不是被监控资源 | 否 | 靠部署约束缓解：每区域独立采集机 |
+| ES 无查询级隔离 | 否（空授权=拒绝） | 加启动守卫：非 prometheus 数据源被授权业务组时打 WARNING |
+| public 看板绕过业务组 | 是，但泄露面是通用模板 | 不改代码。组 2 已盘点，10 个模板看板确认可公开 |
+| 跨区域业务组是可见性通道（用户加进两个区域的组即可同时看两边） | 是 | 功能不是漏洞，文档化 |
+| 注入是改写查询不是物理隔离，VM 里仍是全量库 | — | 接受 |
+| 重命名 `_待分配` 会静默建出重名组（自动归属按名字找） | 否 | 极低频运维事故，加 id 持久化不划算，接受 + 文档 |
+| 未归组机器对区域用户可见（`/target/list` 与 `GET /targets` 均含未归组兜底） | 否（现场计数 0） | 保持现状。新机器由 `BindTargetsToUnassigned` 自动进 `_待分配`(admin-only)，「未归组」是该自动归属**失败**时的兜底异常态 |
+| 接第二个 k8s 集群需 join key 加 cluster 前缀 | 否 | 越早做越便宜（画布越多越贵），属多集群议题不在本次范围 |
+| `docker-hub` 实例名接第二区域时撞 `uk_instance_name` | 否 | 写进上线清单 |
+
+**告警规则那条的两个选项**（需产品决策，未执行）：
+
+- **A. 收权限** —— 把 `/alert-rules/{add,put,del}` 从 Standard 删掉只留 admin。
+  一条 SQL、零代码、零回归。现场 22 条规则全由 admin 建，今天无人受影响。
+  代价：区域用户不能自建告警规则。
+- **B. 求值时注入** —— 在 `alert/eval/eval.go` 按 `rule.GroupId` 注入，复用现成的
+  `pkg/promql/inject.go` 与 `IdentsByBusiGroupIds`。是正解（动态查，不像「保存时
+  注入」那样随机器归属变化而过期），但求值点有 **4 处**（`eval.go` 315/441/648/1305）、
+  是核心路径，且**有一个必须先定的语义**：业务组无机器时注入空集合会让规则恒不触发 ——
+  现场规则 id=1 就在组 2（「资源清单」，非机器组），一注入即失效。
+
+建议 A 现在做、B 等接第二区域且确实需要区域用户自建规则时再做：
+用一条权限配置换掉一次核心路径改造，今天的收益完全相同。
+
+### 五、待办
+
+1. **5 个 commit 未 push**。push 会连带另一会话的 room-monitor 改动一起上生产，须先协调。
+2. **行为验证一次未跑**。权限判断只有真实的非 admin 会话能测，代码还在本地。
+   部署后建临时账号（Standard + 加入区域用户组）重跑 8/27 那张表，
+   预期全部翻成 403 或空集；**只测「应当被拒」的路径，不测 admin 成功路径**；测后全删、残留检查 0。
+   同时回归 admin 与区域用户的正常出数 —— `appendTargetBgScope` 改的是查询构造，值得实测。
+3. `Center.RegionIsolation.Enable` 仍为 **false**，即**指标层隔离在生产上尚未生效**，
+   今天真正起作用的只有资源列表层的业务组过滤。打开时现场需先设
+   `AllowIdentlessSeries=true`，否则 DeepFlow 相关页面对区域用户全空。
+4. 告警规则权限（第四节 A/B）待决策。
+5. 测试账号 `alert` 与 admin 共享密码 hash，确认为测试账号，待删。
