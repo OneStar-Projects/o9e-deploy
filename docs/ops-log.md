@@ -1418,8 +1418,12 @@ DELETE FROM role_operation
 改配置时 `git fetch` 报
 `Failed to connect to 127.0.0.1 port 8080: Connection refused`，
 于是当场判断「cosl-6456 连不上 GitHub，只能手工同步」，走了备份 + 传 /tmp + diff + 覆盖。
-**这个判断是错的**：代理是临时断的，当天稍后已恢复，`git fetch` 正常
-（`09a3c20..c12be82`）。服务器**能**走 git，正常流程仍是 push 后到服务器 pull。
+**这个判断是错的**：服务器**能**走 git，正常流程仍是 push 后到服务器 pull。
+
+真正的原因当天稍后查清了（见本条目末尾「代理脚本合并」）：出网靠 `~/.gitconfig` 里的
+`http.proxy = http://127.0.0.1:8080`，而这个 8080 由**两个要手工前台运行的脚本**撑着，
+终端一关就死。所以它既不是「永久不通」也不是「已恢复」，而是**取决于当时有没有人
+开着那两个终端**。已合并成一个后台常驻脚本根治。
 
 手工同步本身没做错（配置确实按预期上线了），保留下来作为代理挂掉时的应急手段。
 **其中「覆盖前必须先 diff」这一条与代理无关，永远要做**：服务器上那个文件当时带着
@@ -1605,3 +1609,48 @@ ident 全是同一台采集机 `COSLOS-147-10.75.25.147` —— 它在 YJ 组，
 5. 测试账号 `alert` 待删（它不属于任何团队，现在什么都看不到）。
 6. ES 防呆守卫未加；VM-1 timeout 止血未做。
 7. **接入第二个 DeepFlow 数据来源前，`AllowIdentlessSeries` 必须改回 `false`。**
+
+### 九、附：代理脚本合并（根治「代理时有时无」）
+
+查清了本条目第一节那个 `Connection refused` 的真正原因。cosl-6456 出网链路是：
+
+```
+git / curl → HTTP 代理 127.0.0.1:8080  (gost)
+           → SOCKS5    127.0.0.1:1080  (ssh -N -D 动态转发)
+           → aiapi → 外网
+```
+
+`~/.gitconfig` 里写死了 `http.proxy = http://127.0.0.1:8080`，而这两段原来是
+**两个各自前台阻塞的脚本**，要开两个终端手工跑：
+
+| 原脚本 | 内容 |
+|---|---|
+| `/home/kylin/proxy.sh` | `ssh -N -D 127.0.0.1:1080 aiapi` |
+| `/home/kylin/gost/proxy.sh` | `./gost -L http://:8080 -F socks5://127.0.0.1:1080` |
+
+终端一关进程就死，两段缺一整体不通，也没有任何东西保证它们同时在。
+所以代理既不是「永久不通」也不是「已恢复」，**取决于当时有没有人开着那两个终端** ——
+同一天里 `git pull` 一次失败一次成功就是这么来的。
+
+已合并成 `/home/kylin/proxy.sh` 一个脚本，`{start|stop|restart|status|log}`，
+后台常驻（`setsid`，脱离终端）+ 子进程退出自动重连（指数退避，60s 封顶）。
+原 `gost/proxy.sh` 已删除，备份在 `gost/proxy.sh.bak.20260901`。
+
+顺带修掉一个安全问题：原 gost 写的是 `-L http://:8080`，即**绑 0.0.0.0** ——
+内网任何人都能拿这台生产机当跳板出外网。收窄成 `127.0.0.1:8080`。
+收窄前已确认：8080 无任何外部活跃连接、无容器使用、唯一使用者是 `~/.gitconfig`。
+
+**一个值得记下的坑**：守护进程不要把被守护命令的完整 argv 带在自己命令行上。
+第一版写成 `proxy.sh __supervise tunnel ssh -N -D ...`，结果
+`pgrep -f "ssh -N -D"` 会**同时命中 supervisor 和它守着的 ssh**，
+随手一个 `pkill` 就把守护进程一起收掉、自愈静默失效（第一次自愈测试就是这么假失败的）。
+改成 supervisor 只接服务名、命令在脚本内部查表决定。
+
+验证：杀 ssh → 6s 内自动重连；杀 gost → 同；`status` 会实际经代理访问 github.com
+（进程在、端口开不等于能出去，隧道对端挂了也是那个样子）；`git fetch` 实测正常。
+
+**未做**：开机自启。重启后仍需手工 `start`。要的话加一行 crontab：
+
+```bash
+(crontab -l 2>/dev/null; echo '@reboot /home/kylin/proxy.sh start >/dev/null 2>&1') | crontab -
+```
