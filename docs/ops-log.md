@@ -1413,39 +1413,80 @@ DELETE FROM role_operation
 `_待分配` 分到了 **BJ 组**。现场从此是 **YJ 13 台 + BJ 1 台**，
 「授权即全量」不再是理论风险 —— VM-1 只要授权给 BJ，BJ 就能查 YJ 的全部指标。
 
-### 一、⚠️ 部署方式的硬事实：cosl-6456 **连不上 GitHub**
+### 一、配置怎么上服务器：先手工同步，后恢复成 git
 
-```
-$ git fetch origin main
-fatal: unable to access 'https://github.com/.../o9e-deploy.git/':
-       Failed to connect to 127.0.0.1 port 8080: Connection refused
-```
+改配置时 `git fetch` 报
+`Failed to connect to 127.0.0.1 port 8080: Connection refused`，
+于是当场判断「cosl-6456 连不上 GitHub，只能手工同步」，走了备份 + 传 /tmp + diff + 覆盖。
+**这个判断是错的**：代理是临时断的，当天稍后已恢复，`git fetch` 正常
+（`09a3c20..c12be82`）。服务器**能**走 git，正常流程仍是 push 后到服务器 pull。
 
-服务器上 `/home/kylin/o9e-deploy` 的 HEAD 长期停在 `09a3c20`，
-**不是没人 pull，是根本 pull 不动**（配了个不存在的本地代理）。
-
-**所以 o9e-deploy 的配置变更不能靠 push + 服务器 pull，只能手工同步文件。**
-本次用的流程，以后照做：
+手工同步本身没做错（配置确实按预期上线了），保留下来作为代理挂掉时的应急手段。
+**其中「覆盖前必须先 diff」这一条与代理无关，永远要做**：服务器上那个文件当时带着
+**未提交的手工改动**（8/27 关 `AnonymousAccess`、加 `EventHistoryGroupView` 是直接在
+服务器上改的，从没提交），直接 cp 会丢现场配置。本次 diff 结果是「只多了
+RegionIsolation 段、零其它差异」，确认手工改动与 git 版本已等价，才敢覆盖。
 
 ```bash
-# 1. 本地改 etc/o9e/config.toml.tpl，commit + push（保留版本记录）
-# 2. 备份服务器上的文件
+# 应急路径（代理挂了时用）
 ssh cosl-6456 'cp .../config.toml.tpl .../config.toml.tpl.bak.$(date +%Y%m%d)'
-# 3. 传到 /tmp 先 diff，确认只有预期改动再覆盖 ← 关键，别直接 cp
 cat etc/o9e/config.toml.tpl | ssh cosl-6456 'cat > /tmp/config.toml.tpl.new'
-ssh cosl-6456 'diff .../config.toml.tpl /tmp/config.toml.tpl.new'
+ssh cosl-6456 'diff .../config.toml.tpl /tmp/config.toml.tpl.new'   # ← 关键，别直接 cp
 ssh cosl-6456 'cp /tmp/config.toml.tpl.new .../config.toml.tpl'
-# 4. 重启（注意:compose 服务名是 n9e,容器名是 o9e,`restart o9e` 会报 no such service）
+# 重启：compose 服务名是 n9e，容器名才是 o9e，`restart o9e` 会报 no such service
 ssh cosl-6456 'cd /home/kylin/o9e-deploy && docker compose restart n9e'
 ```
 
-**为什么必须先 diff**：服务器上那个文件当时有**未提交的手工改动**
-（8/27 那次把 `AnonymousAccess` 全关、加 `EventHistoryGroupView` 是直接在服务器上改的，
-从没提交）。直接覆盖有丢现场配置的风险。本次 diff 结果是「只多了 RegionIsolation 段、
-零其它差异」，说明手工改动与 git 版本已等价，才敢覆盖。
+#### ⚠️ 收尾时踩的坑：`git checkout --` 恢复的是 HEAD，不是 origin/main
 
-`git status` 里另有 `deepflow/common/config/deepflow-server/server.yaml` 的未提交改动
-和几个未跟踪的 `initsql/*.sql` —— **本次没碰，仍然悬着**。
+代理恢复后想把服务器交回 git 管理，跑了
+`git checkout -- etc/o9e/config.toml.tpl && git pull origin main`。
+前半句执行了，后半句**失败**：
+
+```
+error: cannot pull with rebase: You have unstaged changes.
+```
+
+（服务器配了 `pull.rebase`，`deepflow/.../server.yaml` 的手工改动挡住了 pull。）
+结果停在半截状态 —— 而服务器 HEAD 当时还是旧的 `09a3c20`，
+所以 checkout 把文件**打回了旧版本**：`RegionIsolation` 段没了，
+更糟的是 `PromQuerier = true` 回来了，等于 8/27 关匿名访问的加固被撤销。
+
+三条教训：
+
+1. **`git checkout -- <file>` 恢复到 HEAD，不是 `origin/main`。**
+   fetch 过不等于 HEAD 前进了。要按远端内容恢复得写
+   `git checkout origin/main -- <file>`。
+2. **`&&` 串起来的两条命令，前一条的破坏性不会因为后一条失败而回滚。**
+   涉及生产配置文件时拆开跑、逐条看结果。
+3. **容器行为正常 ≠ 磁盘配置正确。** bind mount 绑的是 inode，
+   `git checkout` 是「换掉整个文件」（新 inode），
+   所以容器内 `/app/etc/config.toml.tpl` 仍是被换掉前那份正确内容、隔离照常生效，
+   磁盘上却已经是错的。**这种故障只在下次重启时才爆发，中间毫无征兆。**
+   核验必须是 `diff <(docker exec o9e cat /app/etc/config.toml.tpl) etc/o9e/config.toml.tpl`，
+   不能只看功能是否正常。
+
+恢复过程：重新把正确内容写回磁盘 → stash `server.yaml` → `git pull origin main`
+（HEAD 到 `c12be82`，文件内容与手工版一致）→ 处理 stash 冲突（见下）。
+终态：HEAD 与 `origin/main` 同步，两个容器的运行配置与磁盘一致。
+
+#### 顺带清掉的历史悬挂：`server.yaml` 的手工改动
+
+`deepflow/common/config/deepflow-server/server.yaml` 那处未提交改动
+（把 remote-write 出口手改成 `http://192.169.219.215:17000/prometheus/v1/write`）
+在这次 pull 里撞上了上游改动 —— 上游把它改成了
+`server.yaml.tmpl` + `render-config.sh`，`server.yaml` 进 `.gitignore` 变成生成物，
+正是为了根治「手改被 git 打回」这个坑。
+
+按上游意图解的：冲突取模板侧，现场值挪进 `deepflow/.env` 的 `N9E_REMOTE_WRITE`
+（该键是上游新加的，现场 `.env` 建于 8/3 还没有），再跑 `./deepflow/render-config.sh`
+生成 `server.yaml`。生成物与 deepflow-server 容器内正在用的配置**非注释内容完全一致**，
+无需重启。
+
+以后改 deepflow 的 n9e 出口：改 `.env` → 重跑 `render-config.sh` →
+`docker compose up -d deepflow-server`，**别再手改 `server.yaml`**。
+
+`initsql/d-cfgsync.sql`、`initsql/e-topo-studio.sql` 两个未跟踪文件**仍然悬着**，本次没碰。
 
 ### 二、开启的配置
 
