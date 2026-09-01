@@ -1214,3 +1214,93 @@ select id,name from busi_group;  select id,group_id,name,public from board;
    `AllowIdentlessSeries=true`，否则 DeepFlow 相关页面对区域用户全空。
 4. 告警规则权限（第四节 A/B）待决策。
 5. 测试账号 `alert` 与 admin 共享密码 hash，确认为测试账号，待删。
+
+---
+
+## 2026-08-31　隔离改造上线与部署核验
+
+08-30 条目第五节的待办 1、2 在本次闭合。5 个 commit 已 push，Jenkins 构建镜像
+（`fuqiangleon/o9e:latest`，08-30 23:41）、08-31 14:00 重建容器完成部署。
+
+**push 前核实：这 5 个 commit 不含 room-monitor 文件**，无需跨会话协调。
+08-30 待办 1 写的「会连带另一会话的改动」是凭记忆写的，不准确，以本条为准。
+
+### 一、部署核验（只读，未改任何配置）
+
+| 检查项 | 结果 | 判据 |
+|---|---|---|
+| 容器健康 | o9e / o9e-nginx / o9e-topo-studio 全部 Up，o9e `healthy` | `docker ps` |
+| 版本已换 | 启动日志出现 `center/center.go:67` 的 `metric isolation is DISABLED` WARNING | 该行是本次改动新增，旧版本不会打 |
+| **判权收严无误伤** | **403 = 0**（1 小时真实流量，417 个 200） | `docker logs o9e-nginx` 状态码分布 |
+| 无崩溃 | **panic = 0**，`forbidden` 计数 0 | `docker logs o9e` |
+| `RegionIsolation.Enable` | false，符合预期 | 上述 WARNING |
+| UI 功能验证 | **通过** | 人工点击：告警规则批量删除／批量改字段／克隆、屏蔽与订阅规则的编辑与批量删除、自愈脚本编辑与绑标签 |
+
+**403 = 0 且 UI 点击全部正常，是本次最想要的结果。**`bgidMatchCheck` 的判据是
+「必须等于 URL 的 `:id`」而非「有权限即可」，比原逻辑严，最大的风险就是挡到正常路径；
+现在正反两侧都验证过了。
+
+一个诊断教训：部署窗口期查容器状态会看到 `created`，那是 Jenkins 重建容器的
+20 秒瞬时态，不是故障。**隔 30 秒复查再下结论。**
+
+### 二、顺带定位的存量故障：31 个 502
+
+502 全部是拓扑画布的 DeepFlow 查询（`flow_metrics.application_map.1m`），
+打到 `proxy/1`，集中成批出现（22 个在 14:27、9 个在 15:05）。
+
+**根因：**
+
+```
+VM-1 数据源 http.timeout = 10000ms   (10 秒)
+该查询在 VM 上实测耗时              = 23.5 秒
+→ ResponseHeaderTimeout 触发
+→ router_proxy.go:225 的 ReverseProxy ErrorHandler
+→ 502(body 仅 44 字节，且不写日志，所以 nginx 与 o9e 两侧日志都查不到成因)
+```
+
+排除过程逐环收窄：nginx 无 `[error]` 行（不是 nginx→upstream 失败）→ o9e 无 panic
+（不是本次改动）→ 从 o9e 容器内直连 `http://victoriametrics:8428` 跑同一条查询，
+**返回 200、9937 字节、23.5 秒**（查询本身是对的，只是慢）。
+
+**与本次部署无关，是存量性能问题。**
+
+**更正 08-28 的一条事实认定：** 之前记「deepflow 指标在 ClickHouse 不在 VM」，
+据此判断这批查询「打错了后端」。**错了。** `flow_metrics.application_map.1m` 的数据
+确实在 VM 里，上面那条查询返回了真实结果（PostgreSQL / HTTP 协议、一批 `ip4_1` ClusterIP）。
+08-28 那句结论的成立范围仅限当时用 `{auto_service_id!=""}` 探测的那组指标。
+
+处置选项（均未执行）：
+
+| | 做法 | 评价 |
+|---|---|---|
+| A | VM-1 timeout 10s → 60s | 一条 SQL 止血。但用户仍要干等 23 秒 |
+| B | 前端降基数（缩窗口 / `topk` / 拆查询），改 `fe/src/services/deepflow.ts` | 治本 |
+| C | VM 侧调优或加资源 | 最重，收益不确定 |
+
+建议 A 止血 + B 跟进。
+
+**与隔离的关联**：DeepFlow 序列**没有 `ident`**，打开 `RegionIsolation.Enable` 后
+这些图会对区域用户直接变空 —— 这正是 `AllowIdentlessSeries` 存在的理由，
+开关打开时必须同时设 true。
+
+### 三、顺带核对的配置（与文档一致）
+
+```
+VM-1  plugin_type=prometheus  busi_group_ids=[6]     ← 授权给 YJ
+ES-1  plugin_type=elasticsearch  busi_group_ids=NULL ← 仅 admin
+```
+
+### 四、待办（更新 08-30 第五节）
+
+已闭合：待办 1（已 push）、待办 2 的 UI 正向验证部分。
+
+仍未做：
+
+1. **B 类越权验证**未做 —— 建临时账号（Standard + 区域用户组）重跑 8/27 那张表，
+   只测「应当被拒」的路径，测后全删、残留检查 0。当前只验证了「正常路径没被挡」，
+   没验证「越权路径确实被拒」。
+2. **告警规则权限 A/B 待决策**（08-30 第四节）—— 唯一还敞着的隔离缺口。
+3. `Center.RegionIsolation.Enable` 仍为 **false**，指标层隔离在生产上未生效。
+4. 测试账号 `alert` 待删。
+5. ES 防呆守卫未加：非 prometheus 数据源被授权给业务组时启动打 WARNING。
+6. VM-1 timeout 止血未做（第二节 A）。
