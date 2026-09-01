@@ -1398,10 +1398,169 @@ DELETE FROM role_operation
 
 ### 三、待办（更新 08-31 第四节）
 
-1. `Center.RegionIsolation.Enable` 仍为 **false** —— 越权验证已闭合，
-   打开的前置条件已满足。打开时必须**同时**设 `AllowIdentlessSeries=true`
-   （否则 DeepFlow 相关页面对区域用户全空），并盯
-   `docker logs o9e-nginx | grep ' 403 '`。
+1. ~~`Center.RegionIsolation.Enable` 仍为 **false**~~ —— **同日已打开**，见下一条目。
 2. 测试账号 `alert` 待删。
 3. ES 防呆守卫未加。
 4. VM-1 timeout 止血未做（08-31 第二节 A）。
+
+---
+
+## 2026-09-01（晚）　指标层隔离正式开启 + 四个区域账号
+
+### 〇、触发原因：BJ 组有机器了
+
+白天还是「13 台全在 YJ」，晚上发现新注册的 `cosl-bqj-10.185.226.14` 已从
+`_待分配` 分到了 **BJ 组**。现场从此是 **YJ 13 台 + BJ 1 台**，
+「授权即全量」不再是理论风险 —— VM-1 只要授权给 BJ，BJ 就能查 YJ 的全部指标。
+
+### 一、⚠️ 部署方式的硬事实：cosl-6456 **连不上 GitHub**
+
+```
+$ git fetch origin main
+fatal: unable to access 'https://github.com/.../o9e-deploy.git/':
+       Failed to connect to 127.0.0.1 port 8080: Connection refused
+```
+
+服务器上 `/home/kylin/o9e-deploy` 的 HEAD 长期停在 `09a3c20`，
+**不是没人 pull，是根本 pull 不动**（配了个不存在的本地代理）。
+
+**所以 o9e-deploy 的配置变更不能靠 push + 服务器 pull，只能手工同步文件。**
+本次用的流程，以后照做：
+
+```bash
+# 1. 本地改 etc/o9e/config.toml.tpl，commit + push（保留版本记录）
+# 2. 备份服务器上的文件
+ssh cosl-6456 'cp .../config.toml.tpl .../config.toml.tpl.bak.$(date +%Y%m%d)'
+# 3. 传到 /tmp 先 diff，确认只有预期改动再覆盖 ← 关键，别直接 cp
+cat etc/o9e/config.toml.tpl | ssh cosl-6456 'cat > /tmp/config.toml.tpl.new'
+ssh cosl-6456 'diff .../config.toml.tpl /tmp/config.toml.tpl.new'
+ssh cosl-6456 'cp /tmp/config.toml.tpl.new .../config.toml.tpl'
+# 4. 重启（注意:compose 服务名是 n9e,容器名是 o9e,`restart o9e` 会报 no such service）
+ssh cosl-6456 'cd /home/kylin/o9e-deploy && docker compose restart n9e'
+```
+
+**为什么必须先 diff**：服务器上那个文件当时有**未提交的手工改动**
+（8/27 那次把 `AnonymousAccess` 全关、加 `EventHistoryGroupView` 是直接在服务器上改的，
+从没提交）。直接覆盖有丢现场配置的风险。本次 diff 结果是「只多了 RegionIsolation 段、
+零其它差异」，说明手工改动与 git 版本已等价，才敢覆盖。
+
+`git status` 里另有 `deepflow/common/config/deepflow-server/server.yaml` 的未提交改动
+和几个未跟踪的 `initsql/*.sql` —— **本次没碰，仍然悬着**。
+
+### 二、开启的配置
+
+`etc/o9e/config.toml.tpl` 新增（提交 `7ff717d`）：
+
+```toml
+[Center.RegionIsolation]
+Enable = true
+AllowIdentlessSeries = true
+```
+
+启动守卫按预期输出：
+
+```
+WARNING center/center.go:80 metric isolation: AllowIdentlessSeries is true,
+series without an ident label (e.g. DeepFlow) are visible to EVERY business group.
+Turn it off before onboarding a second region
+```
+
+容器 healthy，**0 panic，0 个真实用户撞到的 403**。
+
+### 三、数据源授权
+
+`VM-1` 从 `[6]` 扩到 **`[4,5,6,7]`**（BJ/TJ/YJ/ZJ 四个区域组）。
+`ES-1` 保持 `NULL` = 仅 admin。
+
+**顺序很重要，本次是「先开开关，再扩授权」** —— 反过来的话，中间那段时间
+BJ/TJ/ZJ 能查到 YJ 的全部指标。
+
+### 四、四个区域账号
+
+团队骨架早就搭好了（`user_group` 2=BJ / 3=TJ / 4=YJ / 5=ZJ，各自已 `rw` 授权对应业务组），
+缺的只是成员。新建 4 个 `Standard` 账号并入对应团队：
+
+| id | 账号 | 团队 | 业务组 | 机器数 |
+|---|---|---|---|---|
+| 19 | `bj-ops` | BJ | BJ | 1 |
+| 20 | `tj-ops` | TJ | TJ | **0** |
+| 21 | `yj-ops` | YJ | YJ | 13 |
+| 22 | `zj-ops` | ZJ | ZJ | **0** |
+
+统一初始密码，**约定各区域首次登录后自行修改**（n9e 的 `users` 表没有强制改密字段，
+设成什么就是什么，改不改只能靠约定）。
+
+密码 hash 用 MySQL 现算，避开手工拼接：
+
+```sql
+SET @salt = (SELECT cval FROM configs WHERE ckey='salt');
+SET @pw   = MD5(CONCAT(@salt, '<-*Uk30^96eY*->', '<明文>'));
+```
+
+### 五、验证：隔离确实生效
+
+用 `cpu_usage_idle`（12 台都有）做判据，直连 VM 拿基线对照：
+
+| 账号 | 能看到的 ident | 判定 |
+|---|---|---|
+| `yj-ops` | 11 个（12 台减去 BJ 那台） | ✅ |
+| `bj-ops` | 1 个（只有 `cosl-bqj-10.185.226.14`） | ✅ |
+| `tj-ops` / `zj-ops` | **403 `no visible resource for the current user`** | ✅ 名下无机器，设计如此 |
+| `bj-ops` 自写 `{ident="COSLOS-147..."}` | **空结果**（交集为空） | ✅ 越权拿不到 |
+| `bj-ops` 自写 `{ident="cosl-bqj..."}` | **正常出数** | ✅ 没被放大成全部 |
+
+最后一条是**纯追加语义**的关键回归：注入不剔用户自写的 filter，
+两个 filter 天然 AND 取交集。若沿用第一版「先剔再注入」，这里会被放大成 BJ 的全部机器。
+
+### 六、验证过程中差点误判的一次
+
+第一轮用 `count(up)` 测，结果 `yj-ops` 拿到 **61 = 全量基线**，
+且 `count(count by(ident)(up))` **= 1**。第一反应是「隔离没生效」。
+
+实情相反：`up` 的 61 条序列**全部来自 k8s 联邦**（`source="k8s-federate"`），
+ident 全是同一台采集机 `COSLOS-147-10.75.25.147` —— 它在 YJ 组，
+所以 yj-ops 看到全部 61 条**正是正确行为**；`bj-ops` 对同一查询返回空，也是正确的。
+
+**这是「`ident` 是采集者不是被监控资源」最直白的现场证据**：
+一个 k8s 集群里 61 个联邦指标序列，在隔离视角下塌成 **1 台机器**。
+
+**教训**：验证指标隔离**不能用 `up`**（它在本环境几乎全是联邦来源、ident 高度集中）。
+要用 `cpu_usage_idle` 这种 categraf 直采、ident 分散的指标，
+并且**必须直连 VM `:8428` 拿全量基线做对照** —— 只看单个账号的返回值判断不了收窄。
+
+### 七、当前隔离全景
+
+| 模块 | 机制 | 状态 |
+|---|---|---|
+| 机器 / 实例 / cfgsync 列表 | 业务组过滤 + `bgroCheck` | ✅ |
+| 告警规则 / 事件 / 屏蔽 / 订阅 | `bgro`/`bgrw` + `bgidMatchCheck` | ✅ |
+| 看板 / 大屏 | 业务组过滤 + 数据源授权 | ✅ |
+| **指标查询（PromQL）** | **ident 注入** | ✅ **本次开启** |
+| 告警规则**求值** | 无 | ⚠️ 靠收回 Standard 建规则权兜底 |
+| ES / Jaeger / VictoriaLogs | 无 | ⚠️ 靠只授权 admin 兜底 |
+| 无 ident 的序列（DeepFlow） | `AllowIdentlessSeries=true` | ⚠️ **对所有区域可见** |
+
+### 八、待办
+
+1. **UI 点击验证**：用 `yj-ops` / `bj-ops` 过一遍看板、大屏、业务服务、告警页，
+   确认没有页面变空或报错。API 层已验证，**UI 层未验证**。
+2. **`tj-ops` / `zj-ops` 登录后指标查询全部 403** —— 这是设计行为（名下无机器），
+   但对使用者是困惑。给 TJ/ZJ 分配机器后自动恢复，不需要改配置。
+3. **新发现的上游洞**：`GET /busi-groups?all=true` 对**任何登录用户**返回全部业务组
+   （[models/user.go:1012](../../n9e/nightingale/models/user.go) 的
+   `u.IsAdmin() || (len(all) > 0 && all[0])`）。前端 `BusinessGroupSelectWithAll`
+   写死 `all: true`，被告警事件、历史告警、看板列表等 **9 个页面**使用 ——
+   区域用户打开告警页就能看到全部区域的组名。
+   **是元数据泄露不是数据泄露**（拿到 id 后 `busi-group/:id` 仍 403）。
+   修法：`busiGroupGets` 把 `all` 限制成 admin-only。
+4. **方案 X（未归组的第二道防线）**：删 `router_target.go:119` 的 `append(bgids, 0)`、
+   把 `:105` 的 `gids=0` 免判权豁免限制成 admin。现在 `_待分配` 让未归组集合恒为空，
+   但 `BindTargetsToUnassigned` 失败只记日志，失败即静默复活两个洞。
+   在此之前，**`未归组 = 0` 应进巡检**：
+   ```sql
+   SELECT COUNT(*) FROM target t LEFT JOIN target_busi_group g
+     ON g.target_ident = t.ident WHERE g.target_ident IS NULL;
+   ```
+5. 测试账号 `alert` 待删（它不属于任何团队，现在什么都看不到）。
+6. ES 防呆守卫未加；VM-1 timeout 止血未做。
+7. **接入第二个 DeepFlow 数据来源前，`AllowIdentlessSeries` 必须改回 `false`。**
