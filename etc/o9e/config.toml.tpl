@@ -75,6 +75,27 @@ EventHistoryGroupView = true
 PromQuerier = false
 AlertDetail = false
 
+# 指标层区域隔离(2026-09-01 开启)。非 admin 的 PromQL 会被强制注入
+# `ident=~"<该用户业务组下的全部机器>"`,依据与资源列表层同一张 target_busi_group 表。
+#
+# 打开的直接原因:VM-1 是全量库,数据源授权粒度只到「整个数据源」。授权给某个区域
+# 就等于让它能查全平台指标。BJ 组有机器之后这条不再是理论风险。
+#
+# 前置条件(已满足):AnonymousAccess.PromQuerier = false —— 两者同真时进程会拒绝启动,
+# 因为那种组合下查询路由不挂鉴权、拿不到 user,隔离会静默失效。
+#
+# 回滚:Enable 改回 false 重启即可,无数据侧改动。
+[Center.RegionIsolation]
+Enable = true
+
+# 放行**不带 ident 标签**的序列。DeepFlow 的指标没有 ident,不放行的话开关一开
+# 业务服务页对区域用户直接变空。
+#
+# ⚠️ 这是全放行,不是按区域放行 —— 所有区域都能看到这批无 ident 的序列。
+# 现在可以接受(DeepFlow 采集的就是唯一那个 k8s 集群),但**接入第二个 DeepFlow
+# 数据来源前必须改回 false**,否则等于把它的全量数据摊给每个区域。
+AllowIdentlessSeries = true
+
 [[Pushgw.Writers]]
 Url = "http://victoriametrics:8428/api/v1/write"
 Headers = ["X-From", "n9e"]
