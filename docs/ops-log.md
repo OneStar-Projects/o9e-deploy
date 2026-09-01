@@ -1296,11 +1296,112 @@ ES-1  plugin_type=elasticsearch  busi_group_ids=NULL ← 仅 admin
 
 仍未做：
 
-1. **B 类越权验证**未做 —— 建临时账号（Standard + 区域用户组）重跑 8/27 那张表，
-   只测「应当被拒」的路径，测后全删、残留检查 0。当前只验证了「正常路径没被挡」，
-   没验证「越权路径确实被拒」。
-2. **告警规则权限 A/B 待决策**（08-30 第四节）—— 唯一还敞着的隔离缺口。
+1. ~~**B 类越权验证**~~ —— **09-01 已完成**，见下一条目。
+2. ~~**告警规则权限 A/B 待决策**~~ —— **09-01 已选 A 并执行**，见下一条目。
 3. `Center.RegionIsolation.Enable` 仍为 **false**，指标层隔离在生产上未生效。
 4. 测试账号 `alert` 待删。
 5. ES 防呆守卫未加：非 prometheus 数据源被授权给业务组时启动打 WARNING。
 6. VM-1 timeout 止血未做（第二节 A）。
+
+---
+
+## 2026-09-01　B 类越权验证 + 告警规则权限收回
+
+### 一、越权验证（临时账号 `test-bj-tmp`，Standard 角色 + 用户组 2「BJ」→ 业务组 4）
+
+方法沿用 8/27：**只测「应当被拒」的路径，不测 admin 的成功路径**；写路径把字段设成
+**当前值**，即使拦截失效数据也不变。测后全删。
+
+**读路径（目标组 6 = YJ，账号无权）**
+
+| 请求 | 结果 | 判定 |
+|---|---|---|
+| `GET targets?gids=6` | 403 | ✅ `bgroCheck` |
+| `GET busi-group/6/alert-rules` | 403 | ✅ `bgrw` |
+| `GET busi-group/6` | 403 | ✅ |
+| `GET cfgsync/instances?gids=6` | 200 `[]` | ✅ 过滤语义（不是判权端点） |
+| `GET cfgsync/hosts?gids=6` | 200 `[]` | ✅ 同上 |
+| `POST proxy/1`（VM-1，授权给 [6]） | 403 | ✅ `CanAccessDatasource` |
+| `POST proxy/2`（ES-1，`busi_group_ids` NULL） | 403 | ✅ 空授权 = 代码强制拒绝 |
+| `GET boards?bids=10,11,12`（组 1，`public=0`） | 200 `[]` | ✅ 已过滤 |
+| `GET board/10` | 403 | ✅ |
+| **对照组（自己的组 4）** `GET targets?gids=4` | 200 `{"total":0}` | ✅ 没挡错人 |
+| **对照组** `GET busi-group/4/alert-rules` | 200 `[]` | ✅ |
+
+**告警事件（本次改造新补的判权点，重点验证）**
+
+| 请求 | 结果 | 判定 |
+|---|---|---|
+| `POST alert-cur-events/card/details` `ids=[182487,182483]`（组 6） | **403** | ✅ 逐 group_id 判权生效 |
+| `GET alert-cur-event/182487` | **403** | ✅ |
+| `GET alert-cur-events/list`（不带 gids） | 200 `[]` | ✅ 默认收窄到自己的组 |
+
+> ⚠️ **踩过的坑：第一轮用了已恢复消失的事件 id（182340/182358），拿到 `200 {"dat":[]}`。**
+> 那不是「未拦截」，而是**记录不存在、判权循环根本没执行** —— 等于没测到。
+> 同理 `GET alert-cur-event/182340` 的 **500** 也是记录缺失导致，不是缺陷。
+> **教训：测事件类判权必须先 `SELECT` 确认 id 当前存在**（告警会自动恢复，
+> id 的有效期只有几小时）。
+
+**写路径（`bgidMatchCheck`，本次新增）**
+
+| 请求 | 结果 | 判定 |
+|---|---|---|
+| `PUT busi-group/4/alert-rules/fields` `ids=[3]`（规则 3 在组 6） | **403** | ✅ `bgidMatchCheck` 挡住「借自己有权的壳改别人的记录」 |
+| `PUT busi-group/6/alert-rules/fields` `ids=[3]` | 403 | ✅ `bgrw` 在更外层就挡了 |
+| `DELETE busi-group/4/alert-rules` `ids=[3]` | **200** | ⚠️ 见下 |
+
+**`DELETE` 返回 200 是上游的另一种防护形态，不是漏洞。**
+`models.AlertRuleDels`（`models/alert_rule.go:1010`）的 SQL 自带
+`WHERE id = ? AND group_id = ?`（handler 注释原文 "param(busiGroupId) for protect"），
+跨组删除**删 0 行**，`Delete` 不报错所以返回 200。已核验规则 3 仍在、组 6 仍 21 条。
+
+所以现在库里并存两种防护：**判权型返 403**（`bgidMatchCheck`，本次加的）与
+**WHERE 兜底型返 200**（上游原生）。**不动上游逻辑** —— 数据是安全的，改成 403
+需要先查再判，是把一层防护换成另一层，不划算。但要知道这个差异：
+**看到 200 不等于操作生效**，判断写路径是否被挡必须查数据，不能只看状态码。
+
+**清理与核验**
+
+```
+DELETE FROM user_group_member WHERE user_id=18;
+DELETE FROM users WHERE id=18 AND username='test-bj-tmp';
+```
+
+残留 0；数据未被改动：`alert_rule` 22 条 / 组 6 21 条 / `busi_group` 7 / `target` 13，
+与测试前基线一致。
+
+### 二、告警规则权限：选 A，已执行
+
+08-30 摊开的 A/B 二选一，选 **A：收回 Standard 角色的建/改/删规则权**。
+B（保存时按 `group_id` 持久化注入 PromQL）语义上会卡住 —— 规则 id=1 属于组 2
+「资源清单」，那不是机器组，注不出 ident 集合。
+
+```sql
+DELETE FROM role_operation
+ WHERE role_name='Standard'
+   AND operation IN ('/alert-rules/add','/alert-rules/del','/alert-rules/put');
+```
+
+收回后 Standard 剩 `/alert-rules`、`/alert-rules-built-in` 两条**只读**；Guest 6 条未动。
+
+**影响面为零**：全站只有 2 个用户 —— `admin`（Admin 角色，不受 `role_operation` 约束）
+和 `alert`（Standard，测试账号）。现场规则本就全部由 admin 建立。
+
+**回滚**：把上面三行 `INSERT` 回去即可。
+
+**这条堵的是**：区域用户建的规则在求值时没有用户上下文、会对**全量数据**求值 ——
+指标层隔离管不到告警规则这条路径。收回建规则权后，该缺口从「敞着」变成
+「只有 admin 能碰」，与 ES / Jaeger / VictoriaLogs 的兜底方式一致。
+
+**代价**：区域用户从此不能自建告警规则，加规则要走 admin。接入第二个区域、
+区域方要自治时这条会变成痛点，届时再做 B。
+
+### 三、待办（更新 08-31 第四节）
+
+1. `Center.RegionIsolation.Enable` 仍为 **false** —— 越权验证已闭合，
+   打开的前置条件已满足。打开时必须**同时**设 `AllowIdentlessSeries=true`
+   （否则 DeepFlow 相关页面对区域用户全空），并盯
+   `docker logs o9e-nginx | grep ' 403 '`。
+2. 测试账号 `alert` 待删。
+3. ES 防呆守卫未加。
+4. VM-1 timeout 止血未做（08-31 第二节 A）。
