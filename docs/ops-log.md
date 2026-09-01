@@ -1654,3 +1654,81 @@ git / curl → HTTP 代理 127.0.0.1:8080  (gost)
 ```bash
 (crontab -l 2>/dev/null; echo '@reboot /home/kylin/proxy.sh start >/dev/null 2>&1') | crontab -
 ```
+
+### 十、镜像更新到 09-01 构建版 + 一个会复发的权限坑
+
+`fuqiangleon/o9e:latest` 从 `66d29dd01b23`（08-30 23:41 构建）更新到
+`aaefbf915419`（09-01 16:12 构建）。代码侧无实质差异 ——
+镜像后的两个 commit（`51422df6`、`21839d01`）只改 `agents/n9e-agents/` 下的
+`install.sh` 和 categraf 的 `exec.toml`，而 `deploy/single-node/Dockerfile` 只 COPY
+二进制、`nightingale/etc`、`integrations` 和 topo-studio 三件套，**不含 `agents/`**。
+
+#### ⚠️ 更新后容器起不来：`Permission denied` 读配置模板
+
+`docker compose up -d n9e` 之后容器进入 `restarting`，连续重启 11 次：
+
+```
+/docker-entrypoint.sh: line 11: can't open /app/etc/config.toml.tpl: Permission denied
+main.go:39: failed to initialize: ... fail to found config file, config dir path: etc
+```
+
+（第二行是误导性的次生现象：entrypoint 的 envsubst 读不了模板 → 没生成
+`config.toml` → n9e 报「配置目录里没有配置文件」。真正的错在第一行。）
+
+根因是**文件权限**，不是镜像：
+
+| | |
+|---|---|
+| 宿主文件 | `-rw-r----- kylin:kylin`（640） |
+| 容器内用户 | `uid=100(n9e) gid=101(n9e)`（Dockerfile 里 `USER n9e`） |
+
+uid 100 既不是 owner 也不在 group，读不了 640。
+
+**为什么之前一直没暴露**：这台机器 `umask` 是 `0027`，而
+**git 重建文件时按 umask 定权限**（git 只跟踪可执行位，不跟踪读写位）。
+本条目第一节那轮 `git checkout` + `git pull` 重建了 `config.toml.tpl`，
+把它从原来可读的权限打成了 640。但当时容器**没有重启**，
+一直在用 bind mount 的旧 inode，所以毫无征兆 —— 直到这次更新镜像才引爆。
+
+**这直接暴露了第一节那套核验方法的盲区**：
+
+```bash
+diff <(docker exec o9e cat /app/etc/config.toml.tpl) etc/o9e/config.toml.tpl   # ← 只比内容
+```
+
+内容一致不代表容器**下次**读得到。核验必须**同时看权限**：
+
+```bash
+ls -la etc/o9e/config.toml.tpl     # 必须 o+r（其它用户可读），容器 uid 100 才读得了
+```
+
+修复：`chmod 644 etc/o9e/config.toml.tpl`，容器自愈（40s 内 healthy）。
+模板里数据库口令是 `${N9E_DB_PASSWORD}` 占位符、不是明文，644 不泄露秘密。
+
+**这个坑会复发**：只要再有一次 `git checkout` / `git pull` / `git stash pop`
+碰到这个文件，权限就会被 umask 027 打回 640，而且**要等到下次重启才发作**。
+所以「改完配置」的收尾动作固定为两条，缺一不可：
+
+```bash
+chmod 644 etc/o9e/config.toml.tpl
+diff <(docker exec o9e cat /app/etc/config.toml.tpl) etc/o9e/config.toml.tpl
+```
+
+#### 更新后回归
+
+| 检查 | 结果 |
+|---|---|
+| 容器 | `running/healthy`，镜像 `aaefbf915419` |
+| 启动日志 | 无 ERRO/panic；唯一 WARNING 是预期的 `AllowIdentlessSeries` |
+| 容器内实际配置 | `RegionIsolation.Enable = true`、`PromQuerier = false` |
+| `bj-ops` 可见 ident | 1 ✅ |
+| `yj-ops` 可见 ident | 11 ✅ |
+| VM 全量基线 | 12（= 1 + 11，收窄精确、无重叠无遗漏） |
+| `tj-ops` | 403 `no visible resource for the current user` ✅ |
+| nginx 异常 403 | 0 ✅ |
+
+回滚锚点：旧镜像 `66d29dd01b23` 仍在本地，
+`docker compose down n9e && docker run` 指定该 ID 即可退回。
+
+（顺带：VM 没有宿主机端口映射，从宿主 `curl 127.0.0.1:8428` 拿不到基线，
+要 `docker exec o9e-vm wget -qO- 'http://127.0.0.1:8428/...'`。）
