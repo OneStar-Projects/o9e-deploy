@@ -1732,3 +1732,146 @@ diff <(docker exec o9e cat /app/etc/config.toml.tpl) etc/o9e/config.toml.tpl
 
 （顺带：VM 没有宿主机端口映射，从宿主 `curl 127.0.0.1:8428` 拿不到基线，
 要 `docker exec o9e-vm wget -qO- 'http://127.0.0.1:8428/...'`。）
+
+---
+
+## 2026-09-08　镜像更新：代理换对端 + 放弃 Docker Hub，改从构建机直灌
+
+要上的是 Jenkins `OneIT-n9e-image` build 130（sha1 `19e757fa`，分支
+`feat/cfgsync-mvp`）。常规路径 `docker compose pull n9e` **整条都走不通**，
+最后靠「从构建机 `docker save | ssh | docker load`」落地。这次踩到的两件事
+（代理对端死了、Docker Hub 全线不可达）都会复发，记全。
+
+### 一、代理：上游主机没了，不是被墙
+
+cosl-6456 出网链路是
+
+```
+git / curl / docker → HTTP 代理 127.0.0.1:8080 (gost)
+                    → SOCKS5 127.0.0.1:1080 (ssh -N -D)
+                    → 上游 → 公网
+```
+
+`proxy.sh` 里上游写死 `SSH_HOST=aiapi`（`aiapi.onestar.io` = 47.130.2.174，
+经 `ProxyJump b` 出去）。这次起代理起不来，一路查下来：
+
+| 探测 | 笔记本 | cosl-213 |
+|---|---|---|
+| `aiapi.onestar.io:22` | 拒绝 | 拒绝 |
+| `:443` / `:2222` | 拒绝 | 拒绝 |
+| ICMP | 100% 丢包 | 100% 丢包 |
+
+**两个互不相干的网络同时打不通 = 那台主机没了**，不是 COSL 侧封锁、也不是
+端口问题（中途试过把 `~/.ssh/config` 的 aiapi 端口改成 2222，无效）。
+
+修复是一行——把隧道对端换成本来就有出网能力的 **cosl-213**：
+
+```bash
+# /home/kylin/proxy.sh:20    备份 proxy.sh.bak.20260908
+-SSH_HOST=aiapi
++SSH_HOST=b        # b = 10.185.2.13 = cosl-213
+```
+
+改完 8080 正常，`git` / `curl` 恢复。
+
+**`proxy.sh` 还有三个没修的毛病**，下次它「报成功但其实没通」时先看这里：
+
+1. `alive()`（76-80 行）只检查 supervisor 进程的 PID，而 supervisor 是个
+   `while :` 循环——**隧道一次都没建起来，`start` 也照样报成功**。
+2. 退避重置（69 行）`(( SECONDS - t0 > 60 )) && delay=2` 用的是进程运行时长
+   而不是隧道健康度；ssh 连接超时本身就要 ~2 分钟，所以退避**永远**被重置回 2s，
+   等于没有退避。
+3. `status` 的健康探测打 `github.com`，这条路上它不稳（`api.github.com` 反而通），
+   现在会给假阴性。
+4. 没有开机自启。
+
+### 二、Docker Hub 这条路整条是死的
+
+代理通了之后 `docker compose pull` 还是不行。逐个源实测
+（在 cosl-213 上，12s 采样，拉同一个 blob `751c720dfccc`）：
+
+| 源 | 结果 |
+|---|---|
+| `registry-1.docker.io`（官方） | **000**，连 cosl-213 直连都不通 |
+| `docker.m.daocloud.io` | 401 有 token，但 blob **403** |
+| `docker.1ms.run` | 200，blob 302 到 CloudFront，**9–46 KB/s** |
+| `docker.actima.top` | 200 @ 109 KB/s，很快撞 `toomanyrequests`（纯透传，不是缓存） |
+| `dockerpull.cn` | 200 @ 73 KB/s |
+| `docker.xuanyuan.me` | 403 |
+| `hub.rat.dev` | 401 |
+
+对照组：cosl-213 拉 `mirrors.aliyun.com` 是 **32.7 MB/s**——链路本身没问题，
+是 Docker Hub 侧（官方被墙 + 加速站限速/限流）。
+
+顺带记两条：
+
+- **cosl-6456 没有任何 HTTPS 出网**。`mirrors.aliyun.com`、`github.com`、
+  `ghcr.io`、各镜像站，全部 000。注意 `/dev/tcp` 探 443 **会成功**——中间盒收了
+  SYN 再丢包，TCP 层探测在这里是假信号，必须用 `curl` 打到 HTTPS 层才算数。
+- `registry-mirrors` 改完 **`systemctl reload docker` 即可生效**（SIGHUP），
+  容器不会重启。本次给 `/etc/docker/daemon.json` 加了 `docker.1ms.run`
+  （备份 `daemon.json.bak.20260908`）；后来改走直灌，这条改动没派上用场，留着无害。
+
+### 三、正解：从构建机直灌，全程不碰公网 registry
+
+镜像本来就在 Jenkins 构建节点 `ubuntu-5092`（ssh 别名 `92`）上，`docker save`
+出来管道推过去即可。**这是以后的首选路径，别再跟镜像站较劲。**
+
+```bash
+ssh 92 'sudo docker save fuqiangleon/o9e:latest | gzip -1' \
+  | ssh cosl-6456 'docker load'
+```
+
+- 92 上 `ubuntu` **不在 docker 组**，`sudo` 也**要口令**（见密码本），
+  所以命令里要带 `sudo`；想省事就 `usermod -aG docker ubuntu`。
+- 实测 **133 KB/s**、约 30 分钟到位。对比走 1ms 站是 7 KB/s（3 小时）。
+- 走笔记本中转，两段 ssh 都别在会话里裸跑——上一次 `docker compose pull` 就是
+  因为持有它的 ssh 会话结束、被 SIGHUP 掉，在 32MB 处 `canceled`。
+
+#### 校验：比 rootfs layer，别比 image ID
+
+`docker load` 完两边 image ID **对不上**：92 是 `73ae733c4515`，
+6456 是 `df532a83a3d2`。**这是正常的**——92 用 containerd image store（OCI config），
+6456 用传统 docker（Docker v2 schema config），config JSON 序列化不同 → 配置 blob
+的 sha256 不同 → image ID 不同。同理 92 显示 355MB、6456 显示 247MB，也是两种
+存储的口径差异。
+
+判断「灌过去的是不是同一个镜像」要比**文件系统内容**：
+
+```bash
+docker image inspect <id> --format 'created={{.Created}}'
+docker image inspect <id> --format '{{range .RootFS.Layers}}{{.}}
+{{end}}'
+```
+
+本次 11 层 digest 逐条相同，`created` 纳秒级一致
+（`2026-09-08T07:17:09.074006777+08:00`），确认同一份。
+
+### 四、上线与回归
+
+上线前四项（`config.toml.tpl` 权限那条见上一节，**每次都要看**）：
+
+| 检查 | 结果 |
+|---|---|
+| `etc/o9e/config.toml.tpl` | `-rw-r--r--` 644 ✅ |
+| `.env` 的 `O9E_TAG` | `latest`，与 `docker load` 带进来的 tag 对得上 ✅ |
+| compose 引用 | `docker-compose.yaml:177`(n9e) + `:217`(topo-studio)，共用同一镜像 |
+| `/data` 剩余 | 202G ✅ |
+
+```bash
+cd /home/kylin/o9e-deploy && docker compose up -d n9e topo-studio
+```
+
+| 回归项 | 结果 |
+|---|---|
+| `o9e` / `o9e-topo-studio` | 均 **healthy**，都在 `df532a83a3d2` |
+| `:17000/api/n9e/version` | 200 |
+| 首页 `https://` | 200，bundle `/assets/index-9ef64b42.js` |
+| 告警引擎 | 各 `alert_eval_*` 正常出值 |
+
+回滚锚点：旧镜像 `aaefbf91541a`（9-01 构建）仍在本地（dangling），
+`docker tag aaefbf91541a fuqiangleon/o9e:latest && docker compose up -d n9e topo-studio` 即可退回。
+
+（本机 `fuqiangleon/o9e` 已积了 19 个 untagged 旧镜像 × 247MB ≈ 4.7G，
+`/data` 还很宽裕，暂不清理；真要清只 `docker rmi` 明确的旧 ID，
+**别用 `docker image prune -a`**，会连正在用的其它镜像一起端。）
