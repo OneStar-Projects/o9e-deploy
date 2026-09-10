@@ -1875,3 +1875,326 @@ cd /home/kylin/o9e-deploy && docker compose up -d n9e topo-studio
 （本机 `fuqiangleon/o9e` 已积了 19 个 untagged 旧镜像 × 247MB ≈ 4.7G，
 `/data` 还很宽裕，暂不清理；真要清只 `docker rmi` 明确的旧 ID，
 **别用 `docker image prune -a`**，会连正在用的其它镜像一起端。）
+
+## 2026-09-09　镜像更新：cfgsync 热补丁随发版自动收敛
+
+按上一节的直灌路径又走一遍，**全程没有意外**（代理没用上，Docker Hub 没碰）。
+这次的重点不在传输，而在**怎么确认「要灌的镜像里到底有没有那个 commit」**——
+上一次 SQL Server 拨测上线时给 `net_response` 模板打了 DB 热补丁，
+这次发版必须让磁盘和 DB 收敛，判错就会把修复冲掉。
+
+### 一、背景：DB 与磁盘的分叉
+
+9-08 晚给三台 SQL Server 建端口拨测时发现 `net_response/render.tmpl` 渲染了
+**顶层 `interval`**，一台采集机绑 3 个实例时会串成上一个实例的假标签
+（categraf 把同目录 toml 拼成一个文档解析）。修复走的是热补丁：
+UPDATE `cfgsync_monitoring_plugin` 的 `render_tmpl` + `schema_json` + **`checksum`**
+三列，零重启生效（`bundle.go` 的模板缓存 key = `plugin_key:checksum`）。
+
+代价是留了一个分叉：**DB 是新模板，运行中镜像里的磁盘文件还是旧的**。
+`loader.go` 启动时扫磁盘算 `contentChecksum`，与 DB 不等就 update ——
+所以**下一次 n9e 重启，如果镜像里不含修复，DB 会被打回旧模板**。
+
+收敛条件很干脆：写进 DB 的 checksum 当初就取的是本地新文件的
+`sha256(schema.json ‖ 0x00 ‖ render.tmpl)`，只要镜像里带上同样内容，
+loader 比对相等 → 跳过 update → 零动作收敛。
+
+### 二、判断镜像含哪些 commit：别信时间戳，比文件内容
+
+92 上 `fuqiangleon/o9e:latest` = `a68e9da3f452`，`created=2026-09-08T20:30:50`。
+而要收的 5 个提交里，`d259941d`（模板修复）本地 git 显示 `09-08 22:32`，
+最后一个 `4a0520f4` 显示 `09-08 23:57` —— **看上去都晚于镜像构建时间**，
+差点据此判定「镜像是旧的」。
+
+真相是**时区**：开发笔记本在 `NZST(+1200)`，构建机和现场都是 `CST(+0800)`，
+差 4 小时。`4a0520f4` 的 23:57 NZST = 现场 **19:57**，早于 20:30。全部在内。
+
+> **本地 `git log` 的时间戳和现场时间不在同一个时区，拿它跟镜像 `created` 直接比会得出反的结论。**
+> 要判断就比**文件内容**：
+
+```bash
+# 灌之前先在 92 上验，省得白传 30 分钟
+ssh 92 "sudo docker run --rm --entrypoint sha256sum <image> \
+  /app/integrations/Net_Response/collect/net_response/render.tmpl \
+  /app/integrations/Net_Response/collect/net_response/schema.json"
+```
+
+| 文件 | 本地（含 `d259941d`） | 旧镜像 `df532a83a3d2` | 新镜像 `a68e9da3f452` |
+|---|---|---|---|
+| `render.tmpl` | `d1e48651…` | `c8d21853…` ❌ | `d1e48651…` ✅ |
+| `schema.json` | `72de4829…` | `5ea3824b…` ❌ | `72de4829…` ✅ |
+
+前端是 embed 进二进制的，`/app/pub/assets` 不存在，**bundle 名只能启动后从
+HTTP 首页拿**，没法在灌之前预检。
+
+### 三、执行
+
+```bash
+ssh 92 "echo <pw> | sudo -S -p '' docker save fuqiangleon/o9e:latest | gzip -1" \
+  | ssh cosl-6456 'docker load'
+```
+
+- **实测 ~10 分钟**（上一次记的是 30 分钟，链路当时更差）。
+- 挂在后台跑、两段都加 `-o ServerAliveInterval=30`，别裸挂在交互会话里。
+- `docker load` 会自动把同 tag 的旧镜像转成 dangling，**回滚锚点自己就有了**。
+- **92 的 `sudo` 仍然要口令，`ubuntu` 仍然不在 docker 组** —— 上一节提的
+  `usermod -aG docker ubuntu` 一直没做，每次发版都要现找密码本。建议补上。
+
+校验（照上一节：比 rootfs layer，不比 image ID）：11 层 digest + `created`
+与 92 逐条相同；image ID 不同是正常的（92 是 `a68e9da3f452` / containerd，
+6456 是 `1d254f1dd968` / docker）。
+
+### 四、上线与回归
+
+上线前四项：`config.toml.tpl` 644 ✅、`O9E_TAG=latest` ✅、
+compose 两处引用同一镜像 ✅、`/data` 剩 200G ✅。
+
+```bash
+cd /home/kylin/o9e-deploy && docker compose up -d n9e topo-studio
+```
+
+| 回归项 | 结果 |
+|---|---|
+| `o9e` / `o9e-topo-studio` | 均 healthy，都在 `1d254f1dd968` |
+| `:17000/api/n9e/version` | 200 |
+| 首页 `https://` | 200，bundle `index-9ef64b42.js` → **`index-c6531a0e.js`**（前端确有更新） |
+| **cfgsync 插件 checksum** | 仍是 `dc087c53…`、1046/1352 字节，`source=builtin` —— **loader 跳过 update，收敛成功** |
+| 容器内 `render.tmpl` | `d1e48651…`，与 DB 同源 |
+| 拨测实例 385/386/387 | 均在，`enabled=1` |
+| 三条 `net_response_result_code` | `code=0`，`host_ident=yjcollect2.13-10.185.2.13`，**无假标签 `interval`** |
+| 拨测周期 | `count_over_time([2m])` = 24 = 3 × 8 → 15s ✅ |
+| 告警规则 24 `sqlserver-port-down` | `disabled=0`，`datasource_queries` 非空 |
+| 告警引擎 | `n9e_alert_eval_query_series_count` 覆盖 **30 条**规则；rule 24 = 0（端口全通，符合预期） |
+
+> 查 VM 要注意：**`o9e-vm` 的 8428 没有映射到宿主机**，宿主机 `curl 127.0.0.1:8428`
+> 会静默返回空。走同网络的容器：`docker exec o9e-nginx wget -qO- 'http://o9e-vm:8428/...'`。
+> 另外告警引擎自监控指标叫 **`n9e_alert_eval_*`**（在 `:17000/metrics`，不在 VM 里），
+> 上一节写的 `alert_eval_*` 少了前缀，照抄会查空。
+
+回滚锚点：旧镜像 `df532a83a3d2`（9-08 构建）已转 dangling 留在本地，
+`docker tag df532a83a3d2 fuqiangleon/o9e:latest && docker compose up -d n9e topo-studio`。
+注意退回这个镜像会**同时把 `net_response` 模板打回旧版**（磁盘旧 → loader 覆盖 DB），
+届时要重跑热补丁那条 UPDATE（备份 `/tmp/np_backup.txt`）。
+
+遗留：36 个 cfgsync 模板里仍有 **31 个**渲染顶层 `interval`（含 `sqlserver`），
+只有 `snmp` 和 `net_response` 修过；`render/e2e_integrations_test.go` 不校验顶层键。
+下次要给一台采集机加第 2 个同插件实例前，先看该模板有没有顶层键。
+
+---
+
+## 2026-09-09（晚）　procstat 拆成「进程」/「Windows 服务」两个模板
+
+### 起因
+
+procstat 一个表单同时挂着 `search_exec_substring` / `search_cmdline_substring` /
+`search_win_service` 三个搜索框，而 categraf 那边（`procstat.go:187-197`）是
+**if / else-if 优先级链**：exec > cmdline > win_service。填两个以上时低优先级的被
+**静默忽略**，UI 上完全看不出来。加上 win_service 在 Linux 上是空实现
+（`win_service_notwindows.go` 固定返回错误 → `lookup_count = 0`），跟"服务真挂了"
+在指标上一模一样，绑错平台会得到一条永远在响的假告警。
+
+顺带发现一个自己埋的雷：上次热补丁时把 `interval_times` 写成了 `"type": "int"`，
+而字段类型白名单（`center/configsync/types.go:42`）里**没有 int**。当时是直接 UPDATE
+DB、绕过了 `schema.Validate`，所以没人拦。表现是前端把这个字段渲染成一条
+「未知字段类型」告警条（`DynamicForm/index.tsx:111`），**字段根本没法填**；
+而下次发版时 loader 会拒掉整个模板 —— 且 loader 里单个模板失败只记 warning、
+不打断启动（`loader.go`），失败形态是"DB 里的旧版本一直不更新"，没有任何显眼报错。
+
+### 改法
+
+拆成两个 plugin，**共用 `input_type = input.procstat`**（landing 路径取的是
+`plugin.InputType`，`bundle.go:281`，不是 plugin_key），所以 categraf 侧零改动、
+两边渲染进同一个目录：
+
+| plugin_key | 界面名 | 搜索方式 | service 标签 |
+|---|---|---|---|
+| `procstat` | 进程监控 | `match_by`(exec/cmdline) + `pattern`，二选一 | **永不渲染** |
+| `procstat_winservice` | Windows 服务监控 | `service_name` | **恒渲染** |
+
+- 三个搜索框合并成 `match_by` + `pattern` 两个字段：优先级链被静默忽略这件事
+  从"靠人不填错"变成**结构上不可能同时出现**。
+- `gather_more_metrics` 从 `string_list` 换成 `multiselect`（`string_list` 渲染的是
+  裸 Input、**完全忽略 options**，等于让人手打指标名）。winservice 那份**故意不给
+  limit / jvm**：gopsutil 在 Windows 上 `Rlimit` 未实现，而 `gatherLimit` 的汇总推送
+  写在 err 判断**外面**，选了会产出两条恒为 0 的假指标。
+- `service` 标签是拓扑画布区分「服务」/「进程」的唯一判据（procstat 自己不输出它）。
+  拆之前它是模板里的一个 if，漏配就静默错栏；现在是常量。
+
+### 关键约束：下发内容必须一个字节都不变
+
+ym3（YJ-IMC-3）上跑着三个实例。bundle 内容哈希一变就 bump revision → 触发 apply，
+**而 Windows 上的 apply 会停一次 categraf**。所以：
+
+- 把现场 `cfgsync_host_bundle_cache`（revision 2）里的三份 TOML 原样抄成 golden 常量，
+  写进 `center/configsync/render/procstat_test.go` 做**逐字节**断言
+  （`search_win_service` 后面那串空格是历史对齐，**故意冻结**）。
+- 补 `center/configsync/render/schema_validate_test.go`：对 `integrations/*/collect/*/`
+  全量跑一遍 loader 启动时的三步（Parse → Validate → Compile）。既有的
+  `e2e_integrations_test.go` 只做渲染不做 Validate，而且挂在 `integrations_e2e`
+  build tag 后面默认不跑，所以那个 `int` 一路没被拦住。37 份全过，procstat 是唯一一个。
+
+### 执行与核验
+
+备份在 `/tmp/procstat-backup/{plugin,instance}-before-20260909.sql`（mysqldump）。
+一个事务里做完：热更 plugin 23、INSERT plugin 37（`procstat_winservice`）、
+迁 388/389/390 三条实例的 `plugin_key` + `params_json`。
+
+| 核验项 | 结果 |
+|---|---|
+| `SHA2(CONCAT(schema_json,CHAR(0),render_tmpl),256) = checksum` | 两行都 **1** —— utf8mb4 round-trip 无损，下次发版 loader 会 skip、自动收敛 |
+| 字段类型 | procstat 9 个 / winservice 7 个，**全部在白名单内**（`int` 已清除） |
+| **手工置 dirty=1 触发重渲染** | 去抖窗口后 `dirty=0`、**`target_revision` 仍是 2**、`content_hash` 仍是 `8768be4f…` |
+| 绑定关系 | 388/389/390 → YJ-IMC-3，未动 |
+
+第三行是最强的证据：renderer 拿**新模板 + 新参数**跑了一遍，走进了
+`state.TargetHash == hash` 那条"无变化"分支（`bundle.go:130`），
+只清 dirty、不 bump revision。**ym3 无感，categraf 没有重启。**
+
+### 遗留
+
+- `agents/n9e-agents-windows/examples/input.procstat/sqlserver.toml` 还在描述拆分前的
+  世界，且注释里"gopsutil 在 Windows 上读不到 fd/io"这句是**错的**（v3 成立，
+  现场 categraf 用的是 v4.25.8，`NumFDs` / `IOCounters` 都有实现）。该文件已被用户
+  从 ym3 baseline 移成 `.bak`。
+- IMC-1 / IMC-2 的 procstat 仍是手工 TOML，没进 cfgsync。
+- 绑定时**不校验 OS**：把 `procstat_winservice` 绑到 Linux 采集机上仍然绑得上，
+  只会得到恒为 0 的假指标。`target.os` 是准的（5 windows / 9 linux），
+  加白名单是廉价的，但本次没做。
+
+---
+
+## 2026-09-10　镜像更新：37 个模板文案返修 + nginx 上游 IP 缓存踩坑
+
+这次要上的是**纯文案改动**（`07852126`，38 文件 +379/−168，全在
+`nightingale/integrations/` 下）：把 37 个采集模板的 hint / description /
+prerequisites 逐条对着 categraf 源码核了一遍，改掉 9 处与实现不符的说法。
+镜像已由 Jenkins 构建好，只走直灌 + 重建。
+
+**结果：模板侧一次到位、零意外，但重建容器时整站 502 了约 100 秒**，
+根因与镜像和模板都无关，是 `deploy-o9e-image.sh` 的一个一直存在、这次才暴露的缺口。
+
+### 一、DRIFT 预检报警是「假警」，但不能靠猜
+
+`--check-only` 报：
+
+```
+⚠️  DB 里是手工改过的模板,新镜像不含该修改,上线后会被 loader 覆盖:procstat_winservice procstat
+```
+
+脚本的判据是「DB ≠ 旧镜像 **且** DB ≠ 新镜像」，它**分不出「新镜像是 DB 的超集」
+这种情况**——而这次恰恰就是：DB 里那份是 9-09 给 procstat 打的热补丁，
+新镜像不但含它，还在它之上加了文案。
+
+判断方法是把 DB 里那两行**拉下来逐字节比**，不是看时间戳：
+
+```bash
+docker exec o9e-mysql mysql -uroot -p"$MP" n9e_v6 -N -B \
+  -e "SELECT render_tmpl FROM cfgsync_monitoring_plugin WHERE plugin_key='procstat'" > /tmp/db.tmpl
+```
+
+| 对象 | DB → 新镜像的差异 |
+|---|---|
+| `procstat/render.tmpl` | **完全一致**（只差 mysql 附加的一个尾行空行） |
+| `procstat_winservice/render.tmpl` | 同上 |
+| `procstat/schema.json` | 新镜像**多**一条 `extra_labels` 提示 |
+| `procstat_winservice/schema.json` | 多一条 `extra_labels`，且 `service_name` 提示改写得更通用 |
+
+**只增不减，且 render.tmpl 逐字节相同** → 覆盖无损，且渲染产物不变
+→ bundle hash 不变 → **不会给三台 Windows 下发 apply**（Windows 上 apply 要停起 categraf）。
+确认到这一步才加 `-y` 放行。
+
+> 判「新镜像含哪些 commit」这次仍是先比时间戳（本地 git 在 NZST+1200，
+> 镜像 `created` 在 CST+0800，`07852126` 的 09-10 00:25 NZST = 现场 **09-09 20:25**，
+> 早于镜像的 20:56）。**这条链有一环是推断的**：它假定「镜像 = 当时的 HEAD」。
+> 真正闭环的是上线后那次全量 checksum 比对（见第四节），
+> 上一节「别信时间戳，比文件内容」的教训这次只做到了一半。
+
+### 二、整站 502：nginx 缓存的是它启动那天解析出的上游 IP
+
+第 8 阶段回归直接失败：
+
+```
+/api/n9e/version=200   首页=502
+```
+
+`17000` 直连是 200 —— **n9e 本身完全正常**，问题在 nginx → 上游这一跳：
+
+```
+connect() failed (111: Connection refused) while connecting to upstream,
+upstream: "http://172.20.0.6:17000/"
+```
+
+查容器 IP，是最坏的一种情况：
+
+| 容器 | 重建后 IP |
+|---|---|
+| `o9e` | 172.20.0.**4** |
+| `o9e-topo-studio` | 172.20.0.**6** |
+| `o9e-nginx` | 172.20.0.11（`Up 9 days`） |
+
+`o9e` 和 `topo-studio` 重建后**互换了地址**。`o9e-nginx` 不在 `$SERVICES` 里、
+不参与重建，它的 upstream IP 是**九天前启动时解析并缓存**的 `172.20.0.6` ——
+于是主 UI 的流量被送进了 topo-studio 的 17000，那里没人监听，连接被拒。
+
+恢复只要让 nginx 重新解析（先 `-t`，配置有错时 nginx 保留旧 worker，不会更糟）：
+
+```bash
+ssh cosl-6456 'docker exec o9e-nginx nginx -t && docker exec o9e-nginx nginx -s reload'
+```
+
+**这是每次镜像更新都会命中的缺口**，以前没暴露只是因为重建后 IP 恰好没变。
+已在 `deploy-o9e-image.sh` 第 7 阶段「等待 healthy」之后补上 `-t` + `-s reload`
+（放在回归之前，否则回归必假失败）。
+
+另外记一条读日志的经验：脚本 `die` 在回归那一步，**后面的漂移复查整段没跑**——
+失败退出会跳过后续所有核验，事后得手工补齐，别以为日志到底了就是全做了。
+
+### 三、这次镜像传输为什么只用了 1 分 17 秒
+
+脚本注释写「10~30 分钟」，实测 `1 分 17 秒`。原因是本次改动只碰了
+`/app/integrations/**` 的文本文件，**12 层 rootfs 里绝大多数层未变**，
+`docker load` 侧已存在的层直接跳过，真正过网的只有变化的那层。
+`docker save | gzip -1 | ssh | docker load` 这条路径本来就是按层去重的。
+纯后端 / 前端改动仍应按 10~30 分钟预期。
+
+### 四、核验
+
+| 项 | 结果 |
+|---|---|
+| rootfs layer | created + 12 层 digest 与构建机全部一致 ✓ |
+| 首页 / 版本接口 | 200 / 200，bundle = `assets/index-8af29f6f.js` |
+| 告警引擎 | `n9e_alert_eval_query_series_count` **30** 条规则在评估 |
+| `/topo-studio/` | 401（**预期**：需 n9e session，无 cookie 直连本就该 401） |
+| cfgsync 模板 | **37/37** DB checksum == 仓库 `sha256(schema.json‖0x00‖render.tmpl)`，两个 procstat 已收敛 |
+| 14 台采集机 | `target_revision == applied_revision`、`dirty=0`、`last_apply_status=applied` |
+| **三台 Windows** | `last_apply_at` 停在 **2026-09-09 20:11**，**部署未触发任何 apply** |
+
+最后一行是本次最想要的那条证据：模板行被 loader 覆盖了，
+但渲染产物不变 → hash 不变 → 走「无变化」分支，**ym1/ym2/ym3 上的 categraf 没有重启**。
+
+全量 checksum 比对的脚本（判「DB 与镜像是否收敛」，比脚本内置的复查更直接）：
+
+```bash
+# 本地按 loader 的算法算一遍仓库里的 37 个模板
+python3 -c "
+import hashlib,pathlib,json
+for s in pathlib.Path('.').glob('*/collect/*/schema.json'):
+    r=s.parent/'render.tmpl'
+    if not r.exists(): continue
+    h=hashlib.sha256(); h.update(s.read_bytes()); h.update(b'\x00'); h.update(r.read_bytes())
+    print(json.loads(s.read_bytes())['plugin_key'], h.hexdigest())
+"   # 再与 SELECT plugin_key, checksum FROM cfgsync_monitoring_plugin 对
+```
+
+### 遗留
+
+- **`deploy-o9e-image.sh` 在此之前一直没进版本库**（`git status` 里是 `??`），
+  等于关键运维脚本只存在于一台开发机上。本次连同 nginx reload 的修复一起提交。
+  脚本内无硬编码凭据：MySQL 口令是运行时从容器 env 取，sudo 口令走 tty / `BUILDER_SUDO_PW`。
+- 漂移预检**不区分「DB 是镜像的子集」**，超集情况仍会报 ⚠️ 要人工判。
+  想自动化的话，判据应从「checksum 不等」换成「把 DB 内容与镜像内容做结构化 diff，
+  只在 DB 有而镜像没有时才告警」。
+- 回归失败即 `die`，**后续核验全部跳过**。可考虑把第 8 阶段各项改成收集失败、
+  跑完再统一判定，避免第一个失败掩盖后面的问题。
+- `o9e-nginx` 已连续运行 9 天且不参与重建，属于「不会被发版覆盖」的组件。
+  它的配置若在这期间被改过，磁盘与运行态可能已经分叉，本次未核查。
