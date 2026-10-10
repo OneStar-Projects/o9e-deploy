@@ -5,7 +5,7 @@ services:
     container_name: deepflow-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: deepflow
+      MYSQL_ROOT_PASSWORD: ${DEEPFLOW_MYSQL_PASSWORD:?先跑 ./render-config.sh 生成口令}
       TZ: Asia/Shanghai
     volumes:
       - type: bind
@@ -23,6 +23,7 @@ services:
     restart: always
     environment:
       TZ: Asia/Shanghai
+      DEEPFLOW_CK_PASSWORD: ${DEEPFLOW_CK_PASSWORD:?先跑 ./render-config.sh 生成口令}
     volumes:
       - type: bind
         source: ./common/config/clickhouse/config.xml
@@ -59,9 +60,10 @@ services:
     - clickhouse
     - deepflow-app
     ports:
-      - 20416:20416  # querier module, querying data usage, http port
-      - 20419:20419  # profile module
-      - 30417:20417  # controller module, deepflow-ctl is used interactively
+      # 只有 17001/17002 给远端 agent;其余是本机 deepflow-ctl/调试用,只绑 127.0.0.1
+      - 127.0.0.1:20416:20416  # querier module, querying data usage, http port
+      - 127.0.0.1:20419:20419  # profile module
+      - 127.0.0.1:30417:20417  # controller module, deepflow-ctl is used interactively
       - 17001:20035  # controller module, control plane, grpc port
       - 17002:20033  # ingester module, data plane, port
   deepflow-app:
@@ -77,7 +79,7 @@ services:
     networks:
       - deepflow
     ports:
-      - 20418:20418
+      - 127.0.0.1:20418:20418
 
 networks:
   deepflow:

@@ -1,0 +1,3 @@
+    ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '__DEEPFLOW_MYSQL_PASSWORD__';
+    CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH mysql_native_password BY '__DEEPFLOW_MYSQL_PASSWORD__';
+    GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION;

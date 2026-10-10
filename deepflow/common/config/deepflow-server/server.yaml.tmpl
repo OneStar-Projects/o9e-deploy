@@ -12,14 +12,14 @@ controller:
     host: clickhouse
     port: 9000
     user-name: default
-    user-password:
+    user-password: __DEEPFLOW_CK_PASSWORD__
   mysql:
     database: deepflow
     host: mysql
     port: 30130
     timeout: 30
     user-name: root
-    user-password: deepflow
+    user-password: __DEEPFLOW_MYSQL_PASSWORD__
   genesis:
     local_ip_ranges:
       # 覆盖所有内网段：RFC1918 私网 + 本环境用到的非标 192.169.x
@@ -63,7 +63,7 @@ ingester:
     port: 9000
     storage-policy:
   ckdb-auth:
-    password:
+    password: __DEEPFLOW_CK_PASSWORD__
     username: default
 querier:
   listen-port: 20416
@@ -73,7 +73,7 @@ querier:
     port: 9000
     timeout: 60
     user-name: default
-    user-password:
+    user-password: __DEEPFLOW_CK_PASSWORD__
   deepflow-app:
     host: deepflow-app
     port: 20418

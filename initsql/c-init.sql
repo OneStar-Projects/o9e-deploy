@@ -1,10 +1,3 @@
-CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '1234';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
-
-CREATE USER IF NOT EXISTS 'root'@'localhost' IDENTIFIED BY '1234';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
-
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '1234';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-
-FLUSH PRIVILEGES;
+-- 本文件原为上游 n9e 的 root 账号初始化(写死了上游默认弱口令),2026-10 安全审计判定为弱口令漏洞后清空。
+-- root@localhost / root@'%' 由 mysql 镜像 entrypoint 按 .env 的 MYSQL_ROOT_PASSWORD 创建,无需在此建账号;
+-- 不要再从上游同步回 CREATE USER ... IDENTIFIED BY 语句。

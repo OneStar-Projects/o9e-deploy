@@ -153,11 +153,10 @@ services:
       - "host.docker.internal:host-gateway"     # 让容器解析 host.docker.internal 到宿主网关
     expose:
       - "60072"
-    # 映射到宿主:供「不在本机的」scanopy daemon 直连 server(daemon poll 出站到 <宿主IP>:60072)。
-    # ⚠ 这会让 scanopy UI 也从宿主端口直接可达(绕过 nginx);仅内网可信网络用。
-    # 只想本机访问改成 "127.0.0.1:60072:60072"。
+    # 默认只绑本机:本机 daemon(host 网络)走 127.0.0.1 即可,UI/API 一律经 nginx 443。
+    # 有「不在本机的」daemon 要直连 server 时,在 .env 设 SCANOPY_BIND=0.0.0.0(会绕过 nginx 暴露明文 HTTP)。
     ports:
-      - "${SCANOPY_PORT:-60072}:60072"
+      - "${SCANOPY_BIND:-127.0.0.1}:${SCANOPY_PORT:-60072}:60072"
     networks: [n9e]
     depends_on:
       scanopy-postgres: { condition: service_healthy }
@@ -328,9 +327,11 @@ services:
       # 在 nginx -g 启动前跑;05- 前缀让它在内置 10-listen-on-ipv6 之前执行。
       - ./etc/nginx/auto-cert.sh:/docker-entrypoint.d/05-auto-cert.sh:ro
     ports:
-      - "${HTTP_PORT:-80}:80"
+      # 对外只开 443。80 仅做跳转、20090 是 ibex 远程执行(agent 未启用),默认只绑本机;
+      # 需要时在 .env 设 HTTP_BIND / IBEX_RPC_BIND=0.0.0.0。
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
-      - "${IBEX_RPC_PORT:-20090}:20090"
+      - "${IBEX_RPC_BIND:-127.0.0.1}:${IBEX_RPC_PORT:-20090}:20090"
     depends_on:
       n9e: { condition: service_healthy }
     networks: [n9e]

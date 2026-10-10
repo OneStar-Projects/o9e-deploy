@@ -23,7 +23,7 @@ dashboards/
 docker compose up -d
 
 # 2. 导入套件(脚本自动建数据源/用户组/业务组, 无需 UI 手动准备)
-N9E_USER=root N9E_PASS=root.2020 ./dashboards/import-dashboards.sh
+N9E_USER=<平台账号> N9E_PASS=<该账号密码> ./dashboards/import-dashboards.sh
 
 # 3. 打开总览盘
 #    http://<host>:17000/dashboards/resource-overview
