@@ -12,6 +12,18 @@ set -eu
 for u in "$N9E_DB_USER" "$TOPO_DB_USER"; do
     [ "$u" = root ] && { echo "[app-users] 业务账号不能是 root,请按 .env.example 改 N9E_DB_USER/TOPO_DB_USER" >&2; exit 1; }
 done
+# 模板占位符没被 init-env.sh 替换就等于弱口令,拒绝执行
+for p in "$N9E_DB_PASSWORD" "$TOPO_DB_PASSWORD" "${N9E_ADMIN_PASSWORD:-}"; do
+    [ "$p" = please-change-me ] && { echo "[app-users] .env 里还有占位符 please-change-me,先跑 ./init-env.sh 生成口令" >&2; exit 1; }
+done
+
+# 新部署:a-n9e.sql 给 admin 写的是上游默认明文 changeme(n9e 首启 InitRoot 会把明文哈希存下)。
+# 在 n9e 首启前把它换成 .env 的随机复杂密码,changeme 永远不生效。已哈希过的(老部署)不动。
+admin_sql=""
+if [ -n "${N9E_ADMIN_PASSWORD:-}" ]; then
+    [ ${#N9E_ADMIN_PASSWORD} -le 31 ] || { echo "[app-users] N9E_ADMIN_PASSWORD 须 ≤31 位(InitRoot 只哈希短于 32 位的明文)" >&2; exit 1; }
+    admin_sql="UPDATE n9e_v6.users SET password='${N9E_ADMIN_PASSWORD}' WHERE username='admin' AND password='changeme';"
+fi
 
 drop_sql=""
 [ "${DROP_REMOTE_ROOT:-0}" = 1 ] && drop_sql="DROP USER IF EXISTS 'root'@'%', 'root'@'127.0.0.1';"
@@ -25,6 +37,7 @@ GRANT ALL PRIVILEGES ON n9e_v6.* TO '${N9E_DB_USER}'@'%';
 CREATE USER IF NOT EXISTS '${TOPO_DB_USER}'@'%' IDENTIFIED BY '${TOPO_DB_PASSWORD}';
 ALTER USER '${TOPO_DB_USER}'@'%' IDENTIFIED BY '${TOPO_DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON topo_studio.* TO '${TOPO_DB_USER}'@'%';
+${admin_sql}
 ${drop_sql}
 FLUSH PRIVILEGES;
 SQL

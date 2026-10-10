@@ -41,6 +41,18 @@ gen_pwd() {
     head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 32
 }
 
+gen_complex() {
+    # 20 位,大小写+数字+至少 2 个符号;符号避开 # $ ` ' " \ / &(# 在 .env 里可能被当注释),
+    # 保证 compose/SQL/awk 都无需转义
+    local p
+    while :; do
+        p="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9@%^*_+=-' | head -c 20)"
+        [[ $p =~ [a-z] && $p =~ [A-Z] && $p =~ [0-9] ]] || continue
+        [ "$(printf '%s' "$p" | tr -dc '@%^*_+=-' | wc -c)" -ge 2 ] && break
+    done
+    printf '%s' "$p"
+}
+
 gen_hex32() {
     # 64 个 hex 字符(= 32 字节,AES-256)。给 N9E_SECRET_MASTER_KEY 用。
     # 纯 coreutils(od),不依赖 openssl;与 n9e center 的 hex.DecodeString 要求一致。
@@ -132,6 +144,7 @@ if [ "${SKIP_ENV}" = 0 ]; then
 MYSQL_ROOT_PWD="$(gen_pwd)"
 N9E_DB_PWD="$(gen_pwd)"          # n9e 业务账号(n9e_app),只授权 n9e_v6
 TOPO_DB_PWD="$(gen_pwd)"         # topo-studio 业务账号(topo_app),只授权 topo_studio
+ADMIN_PWD="$(gen_complex)"       # 平台 admin 初始密码,替换上游默认 changeme
 REDIS_PWD="$(gen_pwd)"
 SCANOPY_ADMIN_PWD="$(gen_pwd)"   # scanopy 管理员密码,scanopy-bootstrap.sh 用它注册/登录
 SCANOPY_PG_PWD="$(gen_pwd)"      # scanopy 后端 postgres 密码(独立于 n9e mysql)
@@ -141,13 +154,14 @@ ELASTIC_PWD="$(gen_pwd)"          # elastic 超级用户密码(Logstash + n9e ES
 
 # 用 awk 一次性重写,跨平台一致
 # SCANOPY_TOKEN 不在这里生成 — 由部署后跑 ./scanopy-bootstrap.sh 调 scanopy API 拿真 token 后写回
-awk -v mysql="${MYSQL_ROOT_PWD}" -v n9e="${N9E_DB_PWD}" -v topo="${TOPO_DB_PWD}" -v redis="${REDIS_PWD}" \
+awk -v mysql="${MYSQL_ROOT_PWD}" -v n9e="${N9E_DB_PWD}" -v topo="${TOPO_DB_PWD}" -v admin="${ADMIN_PWD}" -v redis="${REDIS_PWD}" \
     -v scanopy_admin="${SCANOPY_ADMIN_PWD}" -v scanopy_pg="${SCANOPY_PG_PWD}" \
     -v topo_token="${TOPO_API_TOKEN_VAL}" -v master_key="${MASTER_KEY_VAL}" \
     -v elastic="${ELASTIC_PWD}" '
 /^MYSQL_ROOT_PASSWORD=/       { print "MYSQL_ROOT_PASSWORD=" mysql; next }
 /^N9E_DB_PASSWORD=/           { print "N9E_DB_PASSWORD=" n9e; next }
 /^TOPO_DB_PASSWORD=/          { print "TOPO_DB_PASSWORD=" topo; next }
+/^N9E_ADMIN_PASSWORD=/        { print "N9E_ADMIN_PASSWORD=" admin; next }
 /^REDIS_PASSWORD=/            { print "REDIS_PASSWORD=" redis; next }
 /^SCANOPY_ADMIN_PASSWORD=/    { print "SCANOPY_ADMIN_PASSWORD=" scanopy_admin; next }
 /^SCANOPY_POSTGRES_PASSWORD=/ { print "SCANOPY_POSTGRES_PASSWORD=" scanopy_pg; next }
@@ -163,6 +177,7 @@ echo "[init-env] 已生成 ${DST} (mode 600)"
 echo "[init-env]   8 个密码/token 已替换为 32 字符强随机(A-Za-z0-9),互不复用:"
 echo "[init-env]     MYSQL_ROOT_PASSWORD (root 仅容器内本机登录)"
 echo "[init-env]     N9E_DB_PASSWORD / TOPO_DB_PASSWORD (n9e_app / topo_app 业务账号)"
+echo "[init-env]     N9E_ADMIN_PASSWORD (平台 admin 初始密码,20 位含符号;在 .env 中查看)"
 echo "[init-env]     REDIS_PASSWORD"
 echo "[init-env]     SCANOPY_ADMIN_PASSWORD (scanopy-bootstrap.sh 注册/登录用)"
 echo "[init-env]     SCANOPY_POSTGRES_PASSWORD (scanopy 后端 postgres)"

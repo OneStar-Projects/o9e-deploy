@@ -28,6 +28,8 @@ services:
       N9E_DB_PASSWORD:  ${N9E_DB_PASSWORD}
       TOPO_DB_USER:     ${TOPO_DB_USER}
       TOPO_DB_PASSWORD: ${TOPO_DB_PASSWORD}
+      # 新部署时替换 admin 的上游默认密码 changeme(见 f-app-users.sh)
+      N9E_ADMIN_PASSWORD: ${N9E_ADMIN_PASSWORD:-}
     volumes:
       - mysql-data:/var/lib/mysql
       # 上游 schema(批量,initsql/ 是 nightingale/docker/initsql/ 的真目录副本)
