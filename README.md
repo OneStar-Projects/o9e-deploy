@@ -16,6 +16,8 @@
 > 存活兜底改动),由 fork 仓库根的 `build-images.sh` 构建推送。更新只需改 `.env` 的 `SCANOPY_TAG`
 > (默认 latest)后:`docker compose pull scanopy scanopy-daemon && docker compose up -d scanopy scanopy-daemon`。
 
+配置中心升级需同时发布服务镜像和主机 Agent 安装包，详见 [配置中心升级说明](docs/cfgsync-upgrade.md)。
+
 ## 前置依赖
 
 - Docker 24+,docker compose v2
