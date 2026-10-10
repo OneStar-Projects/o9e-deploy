@@ -28,7 +28,7 @@ services:
       N9E_DB_PASSWORD:  ${N9E_DB_PASSWORD}
       TOPO_DB_USER:     ${TOPO_DB_USER}
       TOPO_DB_PASSWORD: ${TOPO_DB_PASSWORD}
-      # 新部署时替换 admin 的上游默认密码 changeme(见 f-app-users.sh)
+      # 新部署时替换 admin 的上游默认弱口令(见 f-app-users.sh)
       N9E_ADMIN_PASSWORD: ${N9E_ADMIN_PASSWORD:-}
     volumes:
       - mysql-data:/var/lib/mysql
@@ -209,6 +209,14 @@ services:
       - ./etc/o9e/config.toml.tpl:/app/etc/config.toml.tpl:ro
       - n9e-logs:/app/logs
     networks: [n9e]
+    # 覆盖镜像内置健康检查(启动宽限 20s + 4×15s ≈ 80s):全新部署首启要建 170+ 张表,
+    # 2 核机实测约 4 分钟,内置值会判 unhealthy → 依赖它的 nginx 起不来。放宽到 5 分钟宽限 + 20×15s。
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:17000/api/n9e/version || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 20
+      start_period: 300s
     depends_on:
       mysql:           { condition: service_healthy }
       redis:           { condition: service_healthy }
