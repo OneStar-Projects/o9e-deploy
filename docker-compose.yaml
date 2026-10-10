@@ -21,6 +21,13 @@ services:
     environment:
       TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # root 只建 root@localhost(容器内 socket 登录),不建可远程登录的 root@'%'
+      MYSQL_ROOT_HOST: localhost
+      # 供 initsql-extra/f-app-users.sh 建业务账号
+      N9E_DB_USER:      ${N9E_DB_USER}
+      N9E_DB_PASSWORD:  ${N9E_DB_PASSWORD}
+      TOPO_DB_USER:     ${TOPO_DB_USER}
+      TOPO_DB_PASSWORD: ${TOPO_DB_PASSWORD}
     volumes:
       - mysql-data:/var/lib/mysql
       # 上游 schema(批量,initsql/ 是 nightingale/docker/initsql/ 的真目录副本)
@@ -30,10 +37,13 @@ services:
       - ./initsql-extra/d-cfgsync.sql:/docker-entrypoint-initdb.d/d-cfgsync.sql:ro
       # topo-studio 独立库(字典序 e- 在 d- 之后建);仅 CREATE DATABASE,表由 TOPO_DB_MIGRATE 自动建
       - ./initsql-extra/e-topo-studio.sql:/docker-entrypoint-initdb.d/e-topo-studio.sql:ro
+      # 业务专用账号 n9e_app / topo_app(字典序 f- 在建库之后)
+      - ./initsql-extra/f-app-users.sh:/docker-entrypoint-initdb.d/f-app-users.sh:ro
       - ./etc/mysql/my.cnf:/etc/my.cnf:ro
     networks: [n9e]
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      # 走 socket(-h localhost)以 root@localhost 检查;root 不再允许经 TCP 登录
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       # 首次启动 mysql 要走完 initdb(创数据目录 ~90s)+ 跑 a-n9e.sql/d-cfgsync.sql(慢盘下可能 1-2 分钟),
@@ -227,9 +237,8 @@ services:
       TOPO_DB_HOST: mysql
       TOPO_DB_PORT: "3306"
       TOPO_DB_NAME: topo_studio
-      TOPO_DB_USER: root
-      # init-env.sh 保证 N9E_DB_PASSWORD == MYSQL_ROOT_PASSWORD,故 root 登录可用
-      TOPO_DB_PASS: ${N9E_DB_PASSWORD}
+      TOPO_DB_USER: ${TOPO_DB_USER}
+      TOPO_DB_PASS: ${TOPO_DB_PASSWORD}
       TOPO_DB_MIGRATE: "true"
       SCANOPY_URL: http://scanopy:60072
       SCANOPY_TOKEN: ${SCANOPY_TOKEN:-}

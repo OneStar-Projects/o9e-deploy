@@ -67,7 +67,30 @@ docker compose logs -f n9e
 ```
 
 浏览器打开 `https://${N9E_DOMAIN}/`(把 `${N9E_DOMAIN}` 替换为 `.env` 设的值)。
-默认账号 `root` / `root.2020`(首次登录强制改密)。
+管理员账号 `admin`。n9e **不会强制改密**,部署后必须立即设成 20 位以上复杂密码(大小写+数字+符号);
+客户安全审计会扫弱口令,任何账号都不要用默认/简单密码。
+
+### 数据库账号(2026-10 安全加固)
+
+| 账号 | 用途 | 权限 |
+|---|---|---|
+| `root@localhost` | 运维:备份、升级、修复。只能在容器内经 socket 登录(`docker compose exec mysql ...`) | 全部 |
+| `n9e_app` | n9e 连库 | 仅 `n9e_v6` |
+| `topo_app` | topo-studio 连库 | 仅 `topo_studio` |
+
+新部署由 `init-env.sh` 各自生成口令、`initsql-extra/f-app-users.sh` 建账号,无需手工操作。
+**已有部署升级**(初始化脚本不会再跑,按顺序手工做一次):
+
+```bash
+# 1. .env:N9E_DB_USER=n9e_app,新增 TOPO_DB_USER=topo_app;N9E_DB_PASSWORD / TOPO_DB_PASSWORD 各生成新口令
+# 2. mysql 带上新环境变量重建,再建业务账号(含 topo_studio 库)
+docker compose up -d --no-deps mysql
+docker exec -i o9e-mysql sh < initsql-extra/f-app-users.sh
+# 3. n9e / topo-studio 切到新账号(中断约 30~60 秒)
+docker compose up -d --no-deps n9e topo-studio
+# 4. 确认两者正常后,删掉可远程登录的 root
+docker exec -i -e DROP_REMOTE_ROOT=1 o9e-mysql sh < initsql-extra/f-app-users.sh
+```
 
 ### 两个 token(易混,务必分清)
 
