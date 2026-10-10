@@ -351,6 +351,8 @@ services:
       - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
       - "${IBEX_RPC_BIND:-127.0.0.1}:${IBEX_RPC_PORT:-20090}:20090"
+    # 只等 n9e 容器启动,不等健康:nginx 只是反代,n9e 未就绪时短暂返回 502 即可。
+    # 等健康会让全新部署(n9e 首启建表数分钟)时 compose up 判依赖失败、nginx 停在 created(6456 两轮实测)。
     depends_on:
-      n9e: { condition: service_healthy }
+      n9e: { condition: service_started }
     networks: [n9e]
