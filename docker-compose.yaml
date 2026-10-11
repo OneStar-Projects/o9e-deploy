@@ -335,8 +335,9 @@ services:
       TZ: Asia/Shanghai
       # auto-cert.sh 用,缺证书自动签时的 CN/SAN 来源(优先用配置的域名,否则 o9e.local)
       AUTO_CERT_CN: ${N9E_DOMAIN:-o9e.local}
-      # 17000 agent 接口入口:0=只记录不拦截(观察期),1=非 agent 接口返回 403
-      AGENT_API_ENFORCE: ${AGENT_API_ENFORCE:-0}
+      # 17000 agent 接口入口:1=非 agent 接口返回 403(默认,6456 实测 14 台 agent 请求全在放行列表);
+      # 0=只记录不拦截(排障时用)
+      AGENT_API_ENFORCE: ${AGENT_API_ENFORCE:-1}
       # 模板渲染到 /etc/nginx(conf.d 是只读挂载,写不进去)
       NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
     volumes:

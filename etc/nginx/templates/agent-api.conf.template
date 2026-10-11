@@ -4,7 +4,7 @@
 # 按路径过滤,不按来源 IP:经 Docker 端口映射进来的来源地址已被替换成网关地址,无法做网段限制
 # (网段限制需改宿主防火墙,见 docs/security-backlog.md P1)。
 #
-# AGENT_API_ENFORCE=0:只记录不拦截(观察期);=1:非 agent 接口返回 403。
+# AGENT_API_ENFORCE=1(默认):非 agent 接口返回 403;=0:只记录不拦截(排障用)。
 # 日志:宿主 logs/nginx/agent-api.log,字段 path_ok=1 为 agent 接口。
 
 map $uri $agent_path_ok {

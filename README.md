@@ -200,7 +200,11 @@ ss -lntH | awk '{print $4}' | grep -vE '^(127\.|\[::1\])' | sed -E 's/.*://' | s
 grep -rInE --exclude-dir=.git -i \
   "(password|passwd|pwd|secret|identified by)[a-z_]*[\"']?[[:space:]]*[=:]?[[:space:]]*[\"']?(12345[6]|123[4]|ch[a]ngeme|r[o]ot\.2020|passw[o]rd|adm[i]n)[\"']?([[:space:];,)]|$)" .
 
-# 6. 平台登录 —— admin 用 .env 的 N9E_ADMIN_PASSWORD(或已改的新密码)能登录;页面「用户管理」无测试账号、无共用密码
+# 6. 17000 只放行 agent 接口 —— 预期 403(登录)和 200(心跳)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:17000/api/n9e/auth/login -d '{}'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:17000/v1/n9e/heartbeat -d '{}'
+
+# 7. 平台登录 —— admin 用 .env 的 N9E_ADMIN_PASSWORD(或已改的新密码)能登录;页面「用户管理」无测试账号、无共用密码
 ```
 
 未处理的安全事项与整改建议见 [`docs/security-backlog.md`](docs/security-backlog.md)。
@@ -226,7 +230,7 @@ Redis 是缓存 + cfgsync 临时态,可不备份。
 | 端口 | 默认绑定 | 容器 | 用途 |
 |------|:---:|------|------|
 | 443 | 对外 | nginx | Web 与 API(TLS)。用户只从这里访问 |
-| 17000 | 对外 | n9e | agent 上报、心跳、配置同步(明文 HTTP,收敛方案见 `docs/security-backlog.md` P1/P2) |
+| 17000 | 对外 | nginx → n9e | agent 上报入口(明文 HTTP)。**只放行 agent 接口**(指标写入、心跳、配置同步),登录与管理 API 返回 403、只走 443。`AGENT_API_ENFORCE=0` 可临时只记录不拦截;日志 `logs/nginx/agent-api.log` |
 | 80 | 127.0.0.1(`HTTP_BIND`) | nginx | 仅做跳转 HTTPS |
 | 20090 | 127.0.0.1(`IBEX_RPC_BIND`) | nginx (stream) | ibex 远程执行;agent 未启用 |
 | 60072 | 127.0.0.1(`SCANOPY_BIND`) | scanopy | 拓扑发现服务端;本机 daemon 走 127.0.0.1,有远端 daemon 时才放开 |
