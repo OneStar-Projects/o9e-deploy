@@ -23,7 +23,7 @@
 
 | # | 问题 | 风险 | 建议 | 状态 |
 |---|---|---|---|---|
-| P1 | **17000 明文 HTTP 直接对外,暴露 n9e 全部 API(含登录)** | 高:口令明文传输;API 无入口限制 | nginx 接管 17000,只放行 agent 路径(`/prometheus/v1/write`、`/v1/n9e/heartbeat`、`/api/n9e/agent/*`),其余 403;登录只走 443。agent 零改动。先只记日志观察 24h 再拦截 | 讨论中 |
+| P1 | **17000 明文 HTTP 直接对外,暴露 n9e 全部 API(含登录)** | 高:口令明文传输;API 无入口限制 | 入口网关只放行 agent 路径(`/prometheus/v1/write`、`/v1/n9e/heartbeat`、`/api/n9e/agent/*`),其余 403;登录只走 443。代码在分支 `feat/agent-gateway`。**2026-10-11 在 6456 试切失败已回滚**:网关须跑在宿主网络才可能拿到真实来源 IP,而宿主 firewalld 未放行 17000(过去能通是因为 Docker 端口映射绕过 firewalld),切换后 13 台外部 agent 被拦约 11 分钟。**前提**:须先在 firewalld 放行 17000(与 P6 主机防火墙一并决策);另需确认经 VIP 进来的来源 IP 能否保留,否则只能做路径白名单、做不了网段白名单 | 待主机防火墙决策 |
 | P2 | 17000 改 HTTPS | 中 | agent 包已支持自签 https(`N9E_TLS_INSECURE`、config-sync `INSECURE_SKIP_VERIFY`);须逐台改上报地址。**实测 COSLOS×5、IAM、VoIP 到 VIP:443 不通**,只能在 17000 上直接开 TLS,不能改走 443 | 讨论中 |
 | P3 | agent 上报接口无认证 | 中高 | 短期:P1 + 来源网段白名单;中期:上报/心跳加 BasicAuth(15 台含 Windows) | 待排期 |
 | P4 | **376 个 SNMP 类采集实例(交换机/防火墙/UPS/专线)community 明文存于平台库**,未走加密密钥库 | 中:拿到平台库即拿到全网设备只读口令;且全部共用同一 community | 迁移到密钥库(`secret_refs`);推动网络设备改 SNMPv3 或按区域分 community | 待排期 |
