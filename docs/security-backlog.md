@@ -35,3 +35,4 @@
 | P10 | nginx 使用自签证书 | 低 | 申请客户内部 CA 证书替换 `etc/tls/` | 待客户提供 |
 | P11 | topo-studio 连库失败时静默回落内存存储(重启丢数据) | 低(可用性) | 代码改为连库失败即退出,由 `restart: always` 重试 | 待排期 |
 | P12 | 6456 上的加固备份目录含 `.env` 副本 | 低 | ecs1 上线稳定后删除 | 待删除 |
+| P13 | **构建机 92(192.168.50.92)ubuntu 的 sudo 口令为弱口令** | 中高:92 能推送镜像到 Docker Hub、持有代码仓库凭据,被拿下可污染所有部署的镜像 | 改为强口令;或把 ubuntu 加入 docker 组(`sudo usermod -aG docker ubuntu`),镜像直灌不再需要 sudo | 待处理 |
