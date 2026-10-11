@@ -40,17 +40,21 @@
 git clone git@github.com:OneStar-Projects/o9e-deploy.git
 cd o9e-deploy
 
-# 1. 初始化:生成 .env(强随机密码 + TOPO_API_TOKEN + MASTER_KEY)、预签 TLS 自签证书、
-#    修正 bind 挂载文件权限。此步 SCANOPY_TOKEN 故意留空(第 4 步才生成)。
+# 1. 初始化:生成 .env(各账号互不相同的强随机口令 + admin 初始密码 + TOPO_API_TOKEN + MASTER_KEY)、
+#    预签 TLS 自签证书、修正 bind 挂载文件权限。此步 SCANOPY_TOKEN 故意留空(第 4 步才生成)。
+#    ⚠ 不要手改成简单口令;.env 里残留 please-change-me 时 MySQL 初始化会拒绝执行。
 ./init-env.sh
 #    想用真证书:把 fullchain.pem / privkey.pem 放进 etc/tls/ 覆盖自签的即可。
 
 # 2. 拉镜像(走 1ms 加速器)
 docker compose pull
 
-# 3. 启动全栈(9 个容器)
-docker compose up -d
+# 3. 启动服务
+#    主平台 9 个容器(不含日志监控 ES/logstash;2 核等小规格主机不要起 ES):
+docker compose up -d mysql redis victoriametrics scanopy-postgres scanopy-daemon scanopy n9e topo-studio nginx
+#    需要日志监控时再加:docker compose up -d elasticsearch logstash
 docker compose ps                  # 各服务应逐步 healthy
+#    首次启动 MySQL 初始化 + n9e 建表需数分钟(2 核实测约 4 分钟),期间 n9e 显示 starting 属正常。
 #    ⚠ 此时 topo-studio 报 "Not authenticated"、scanopy 拓扑页降级 —— 正常,
 #       因为 SCANOPY_TOKEN 还没生成,下一步解决。
 
@@ -64,11 +68,16 @@ docker compose ps                  # 各服务应逐步 healthy
 
 # 6. 看 n9e 日志确认就绪
 docker compose logs -f n9e
+
+# 7. 部署后安全自检(见下文「部署后安全自检」),全部通过再交付
 ```
 
 浏览器打开 `https://${N9E_DOMAIN}/`(把 `${N9E_DOMAIN}` 替换为 `.env` 设的值)。
-管理员账号 `admin`。n9e **不会强制改密**,部署后必须立即设成 20 位以上复杂密码(大小写+数字+符号);
-客户安全审计会扫弱口令,任何账号都不要用默认/简单密码。
+管理员账号 `admin`,初始密码是 `.env` 里的 `N9E_ADMIN_PASSWORD`(20 位,含符号;上游默认密码已在初始化时替换)。
+n9e **不会强制改密**,交付前按需在页面修改,任何账号都不要用默认/简单密码(客户安全审计会扫弱口令)。
+
+全新部署**没有时序库数据源**:用 `dashboards/import-dashboards.sh` 导入仪表盘时会自动创建,
+或在页面「数据源」中添加 `http://victoriametrics:8428`。
 
 ### 数据库账号(2026-10 安全加固)
 
@@ -79,7 +88,7 @@ docker compose logs -f n9e
 | `topo_app` | topo-studio 连库 | 仅 `topo_studio` |
 
 新部署由 `init-env.sh` 各自生成口令、`initsql-extra/f-app-users.sh` 建账号,无需手工操作。
-**已有部署升级**(初始化脚本不会再跑,按顺序手工做一次):
+**已有部署升级**(初始化脚本不会再跑,按顺序手工做一次;完整升级流程见下文「已有部署的安全加固升级」):
 
 ```bash
 # 1. .env:N9E_DB_USER=n9e_app,新增 TOPO_DB_USER=topo_app;N9E_DB_PASSWORD / TOPO_DB_PASSWORD 各生成新口令
@@ -124,12 +133,85 @@ docker compose logs -f n9e
 > `O9E_TAG` 是 Docker Hub 上 `fuqiangleon/o9e` 的镜像 tag。回滚:把 `.env` 改回旧 tag
 > 再 `docker compose pull n9e && docker compose up -d n9e`。
 
+## 已有部署的安全加固升级(2026-10)
+
+适用于 2026-10 之前部署、仍用 root 连库的环境。**6456 已按此流程实测通过。**
+中断时间:MySQL 重建约 30 秒,应用切换约 1 分钟。
+
+> 几个坑(都踩过):
+> - 小规格主机别直接 `docker compose up -d`(会把 ES/logstash 一起拉起),一律写明服务名;
+> - 停服务后恢复用 `docker compose up -d --no-recreate <服务名…>`,**不要用 `docker compose start`**(不等依赖健康,只起来一半);
+> - `git pull` 会抹掉文件的 o+r,MySQL 读不到 `my.cnf` 时**静默忽略**,所以每次拉代码后都要跑 `./init-env.sh` 修权限。
+
+```bash
+cd ~/o9e-deploy
+# 0. 备份(.env + MySQL)
+B=~/o9e-backup-$(date +%F); mkdir -p $B && chmod 700 $B && cp -p .env $B/env
+docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot \
+    --single-transaction --routines --databases n9e_v6' | gzip > $B/mysql.sql.gz
+
+# 1. 拉代码并修正挂载权限(.env 已存在时只修权限、提示缺失变量,不会覆盖口令)
+git pull && ./init-env.sh
+
+# 2. .env 改用业务账号,口令为 32 位随机串且与 root 不同
+gen(){ head -c 4096 /dev/urandom | LC_ALL=C tr -dc A-Za-z0-9 | head -c 32; }
+sed -i "s/^N9E_DB_USER=.*/N9E_DB_USER=n9e_app/; s/^N9E_DB_PASSWORD=.*/N9E_DB_PASSWORD=$(gen)/" .env
+grep -q '^TOPO_DB_USER=' .env     || echo 'TOPO_DB_USER=topo_app' >> .env
+grep -q '^TOPO_DB_PASSWORD=' .env || echo "TOPO_DB_PASSWORD=$(gen)" >> .env
+
+# 3. MySQL 带新配置重建(my.cnf / 防暴力破解 / socket 健康检查),再建业务账号与 topo_studio 库
+docker compose up -d --no-deps mysql
+docker exec -i o9e-mysql sh < initsql-extra/f-app-users.sh
+
+# 4. 应用切到新账号,nginx / scanopy 应用新的端口绑定
+docker compose up -d --no-deps n9e topo-studio nginx scanopy
+
+# 5. 确认 n9e、topo-studio 正常(日志无 Access denied,topo-studio 日志为 store=mysql)后,删除可远程登录的 root
+docker exec -i -e DROP_REMOTE_ROOT=1 o9e-mysql sh < initsql-extra/f-app-users.sh
+
+# 6. 平台账号:在页面把 admin 及所有共用/简单密码的账号改成复杂密码,删除测试账号
+
+# 7. 若部署了 DeepFlow:生成随机口令并渲染配置;已有数据目录需先在库内改口令(见 deepflow/README.md)
+(cd deepflow && ./render-config.sh)
+
+# 8. 执行下文「部署后安全自检」
+```
+
+## 部署后安全自检
+
+在部署目录执行,全部符合预期再交付:
+
+```bash
+# 1. 数据库账号 —— 预期只有 root@localhost、n9e_app@%、topo_app@%
+docker compose exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot -N -e \
+  "SELECT CONCAT(user,\"@\",host) FROM mysql.user WHERE user NOT LIKE \"mysql.%\""'
+
+# 2. my.cnf 与防暴力破解 —— 预期 100000 和 ACTIVE
+docker compose exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot -N -e \
+  "SELECT @@max_connect_errors; SELECT plugin_status FROM information_schema.plugins WHERE plugin_name=\"CONNECTION_CONTROL\""'
+
+# 3. root 不能经网络登录 —— 预期 Access denied
+docker compose exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot -h$(hostname -i) -e "select 1"'
+
+# 4. 对外端口 —— 预期只有 22、443、17000(启用日志监控时另有 5044/udp)
+ss -lntH | awk '{print $4}' | grep -vE '^(127\.|\[::1\])' | sed -E 's/.*://' | sort -nu
+
+# 5. 部署目录无弱口令文本 —— 预期无输出(模式里用字符类,避免本文件自身含弱口令字面量)
+grep -rInE --exclude-dir=.git -i \
+  "(password|passwd|pwd|secret|identified by)[a-z_]*[\"']?[[:space:]]*[=:]?[[:space:]]*[\"']?(12345[6]|123[4]|ch[a]ngeme|r[o]ot\.2020|passw[o]rd|adm[i]n)[\"']?([[:space:];,)]|$)" .
+
+# 6. 平台登录 —— admin 用 .env 的 N9E_ADMIN_PASSWORD(或已改的新密码)能登录;页面「用户管理」无测试账号、无共用密码
+```
+
+未处理的安全事项与整改建议见 [`docs/security-backlog.md`](docs/security-backlog.md)。
+
 ## 备份
 
 ```bash
-# MySQL 全量
-docker compose exec mysql sh -c 'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
-    --single-transaction --routines n9e_v6' > backup-$(date +%F).sql
+# MySQL 全量(root 只能容器内登录;口令经 MYSQL_PWD 传,不出现在进程参数里)
+docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot \
+    --single-transaction --routines --databases n9e_v6 topo_studio' | gzip > backup-$(date +%F).sql.gz
+chmod 600 backup-*.sql.gz           # 备份含业务数据,勿留在共享目录
 
 # VM 快照(写入到 victoriametrics 的 /vm-data/snapshots)
 docker compose exec victoriametrics wget -qO- http://127.0.0.1:8428/snapshot/create
@@ -139,18 +221,20 @@ Redis 是缓存 + cfgsync 临时态,可不备份。
 
 ## 端口暴露
 
-| 端口 | 宿主 | 容器 | 用途 |
+原则:**对外只开必要端口**。其余默认只绑 127.0.0.1,确需对外时在 `.env` 改对应的 `*_BIND=0.0.0.0`。
+
+| 端口 | 默认绑定 | 容器 | 用途 |
 |------|:---:|------|------|
-| 80 | ✓ | nginx | HTTP → 301 → HTTPS |
-| 443 | ✓ | nginx | 业务 + 前端(TLS) |
-| 20090 | 可选 | nginx (stream) | ibex RPC;categraf 仅内网时建议改 `127.0.0.1:20090:20090` |
-| 60072 | ✓ | scanopy | scanopy server 直连口;供不在本机的 scanopy daemon 出站直连(nginx 不反代;`SCANOPY_PORT` 可改,仅本机访问改 `127.0.0.1:60072:60072`)|
-| 17000 | ✗ | n9e | 内部 |
-| 8428 | ✗ | victoriametrics | 内部 |
-| 3306 | ✗ | mysql | 内部 |
-| 6379 | ✗ | redis | 内部 |
-| 5044/udp | ✓ | logstash | **NetFlow 入口**;远端 agent 的 nprobe 送到此(`NETFLOW_PORT` 可改) |
-| 9200 | ✗ | elasticsearch | 内部(n9e/logstash 走 docker 网络访问) |
+| 443 | 对外 | nginx | Web 与 API(TLS)。用户只从这里访问 |
+| 17000 | 对外 | n9e | agent 上报、心跳、配置同步(明文 HTTP,收敛方案见 `docs/security-backlog.md` P1/P2) |
+| 80 | 127.0.0.1(`HTTP_BIND`) | nginx | 仅做跳转 HTTPS |
+| 20090 | 127.0.0.1(`IBEX_RPC_BIND`) | nginx (stream) | ibex 远程执行;agent 未启用 |
+| 60072 | 127.0.0.1(`SCANOPY_BIND`) | scanopy | 拓扑发现服务端;本机 daemon 走 127.0.0.1,有远端 daemon 时才放开 |
+| 5044/udp | 对外(仅启用日志监控时) | logstash | NetFlow 入口(`NETFLOW_PORT`) |
+| 8428 / 3306 / 6379 / 5432 / 9200 | 不映射 | VM / MySQL / Redis / PG / ES | 仅容器内部 |
+
+> 宿主 firewalld 对 Docker 映射的端口**不生效**(Docker 自己的 DNAT 规则绕过它),
+> 所以端口收敛必须靠上面的绑定地址,不能只改 firewalld。
 
 ## 给被监控主机装 categraf
 
@@ -233,7 +317,7 @@ docker compose down -v
 ~~~
 o9e-deploy/
 ├── install-docker-kylin.sh      # 麒麟 V10 空机器一键装 Docker(装机前置)
-├── init-env.sh                  # 生成 .env(强随机密码 + TOPO_API_TOKEN + ELASTIC_PASSWORD)+ 预签 TLS 证书 + 修正挂载权限 + 设 vm.max_map_count
+├── init-env.sh                  # 生成 .env(各账号互不相同的强随机口令 + admin 初始密码 + 令牌)+ 预签 TLS 证书 + 修正挂载权限 + 设 vm.max_map_count
 ├── scanopy-bootstrap.sh         # 部署后 setup scanopy + 写回 SCANOPY_TOKEN + 重建 n9e/topo-studio
 ├── scanopy-lock-registration.sh # 锁定 scanopy 注册
 ├── gen-scanopy-daemons.sh       # 为多台采集机批量签发 scanopy daemon + 生成各自 compose(可选)
@@ -246,12 +330,14 @@ o9e-deploy/
 │   ├── mysql/my.cnf
 │   ├── logstash/{config/logstash.yml, pipeline/netflow.conf}  # NetFlow → ES 管道
 │   └── tls/                     ← 真证书放这;留空则 init-env.sh 预签自签证书(容器内无法联网装 openssl 自签)
-├── initsql/                     ← 上游 schema 真目录(自包含)
-├── initsql-extra/               ← fork 的增量 SQL
+├── initsql/                     ← 上游 schema 真目录(自包含;a-n9e.sql 的 admin 初始值已改为占位串,同步上游时保留)
+├── initsql-extra/               ← fork 的增量 SQL + f-app-users.sh(建业务账号、替换 admin 初始密码)
+├── docs/security-backlog.md     ← 安全问题清单(已处理 / 未处理)
 └── deepflow/                    ← 独立 DeepFlow server 栈(采集机部署;业务服务拓扑数据源)
     ├── docker-compose.yaml      #   端口预置 17001/17002
     ├── .env.example
-    ├── common/config/           #   server/clickhouse/mysql/app 配置(vendored)
+    ├── render-config.sh         #   生成库口令并渲染 server.yaml / init.sql(起栈前必跑)
+    ├── common/config/           #   server/clickhouse/mysql/app 配置(vendored;口令为占位符)
     ├── deepflow-provision.sh    #   起栈后跑:装 deepflow-ctl + agent-group 端口对齐
     └── README.md                #   部署步骤 + 端口对齐坑
 ~~~
