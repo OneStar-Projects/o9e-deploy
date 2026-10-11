@@ -7,8 +7,15 @@ prometheus exporter remote-write 到 n9e → 前端查出拓扑。
 
 > 本目录是从社区版 DeepFlow CE v7.1 all-in-one docker-compose vendored 而来,只做了两处必要改动:
 > ① 端口预置成 17001/17002(见下文「端口对齐」);② `mysql/init.sql` 把未渲染的 helm 模板
-> `{{ tpl $.Values.password . }}` 渲染成实际口令 `deepflow`(否则全新首启会把 root 口令设成字面
-> 模板串,server 连不上 MySQL)。其余 clickhouse/grafana/app 配置均 1:1 照抄。
+> `{{ tpl $.Values.password . }}` 换成占位符,由 `render-config.sh` 渲染(否则全新首启会把 root
+> 口令设成字面模板串,server 连不上 MySQL)。其余 clickhouse/grafana/app 配置均 1:1 照抄。
+>
+> **2026-10 安全加固**:上游写死的 MySQL 口令与 ClickHouse 空口令被客户审计判为弱口令,现改为
+> `render-config.sh` 首次运行时随机生成(`DEEPFLOW_MYSQL_PASSWORD` / `DEEPFLOW_CK_PASSWORD`,写回
+> `.env`);除 agent 用的 17001/17002 外,其余端口只绑 127.0.0.1。
+> **已有数据目录**(`/opt/deepflow/mysql` 非空)时 init.sql 不会再跑,首次换新口令前先在旧口令下改库:
+> `docker exec deepflow-mysql mysql -uroot -p'<旧口令>' -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '<新口令>'; ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY '<新口令>';"`
+> 再 `docker compose up -d`。ClickHouse 口令取自环境变量,重建容器即生效。
 
 ## 组件
 

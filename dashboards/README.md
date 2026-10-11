@@ -23,7 +23,7 @@ dashboards/
 docker compose up -d
 
 # 2. 导入套件(脚本自动建数据源/用户组/业务组, 无需 UI 手动准备)
-N9E_USER=root N9E_PASS=root.2020 ./dashboards/import-dashboards.sh
+N9E_USER=<平台账号> N9E_PASS=<该账号密码> ./dashboards/import-dashboards.sh
 
 # 3. 打开总览盘
 #    http://<host>:17000/dashboards/resource-overview
@@ -36,7 +36,7 @@ N9E_USER=root N9E_PASS=root.2020 ./dashboards/import-dashboards.sh
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `N9E_ADDR` | `http://localhost:17000` | n9e API 地址 |
-| `N9E_USER` / `N9E_PASS` | `root` / `root.2020` | 管理员凭据(本部署 n9e 启动自建 root;initsql 里的 `admin/changeme` 不可用) |
+| `N9E_USER` / `N9E_PASS` | `root` / 无(必填) | 管理员凭据。本部署管理员是 `admin`,请显式传 `N9E_USER=admin`;口令必填,脚本不内置默认值 |
 | `VM_URL` | `http://victoriametrics:8428/` | prometheus(VM)数据源地址,非标准现场可覆盖 |
 | `BUNDLE_VISIBILITY` | `login` | 可见性四档(声明式,翻转后重跑即生效,不受版本门控):`login`=**所有登录用户可见**(默认,挡匿名);`anonymous`=匿名免登录可读;`private`=仅「资源清单」业务组成员/admin;`busi`=授权给本业务组 |
 

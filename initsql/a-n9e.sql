@@ -25,7 +25,7 @@ CREATE TABLE `users` (
     UNIQUE KEY (`username`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
-insert into `users`(id, username, nickname, password, roles, create_at, create_by, update_at, update_by) values(1, 'admin', '超管', 'changeme', 'Admin', unix_timestamp(now()), 'system', unix_timestamp(now()), 'system');
+insert into `users`(id, username, nickname, password, roles, create_at, create_by, update_at, update_by) values(1, 'admin', '超管', '__set_by_f_app_users__', 'Admin', unix_timestamp(now()), 'system', unix_timestamp(now()), 'system');
 
 CREATE TABLE `user_group` (
     `id` bigint unsigned not null auto_increment,

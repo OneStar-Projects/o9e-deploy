@@ -3,8 +3,8 @@
 #
 # 行为:
 #   - .env 已存在 → 跳过 .env 生成(避免覆盖运维改过的值,先 mv 备份再重跑)
-#   - .env 不存在 → 拷贝 .env.example 并替换 8 个密钥字段(占位符 → 强随机):
-#       MYSQL_ROOT_PASSWORD / N9E_DB_PASSWORD / REDIS_PASSWORD /
+#   - .env 不存在 → 拷贝 .env.example 并替换 9 个密钥字段(占位符 → 强随机,互不复用):
+#       MYSQL_ROOT_PASSWORD / N9E_DB_PASSWORD / TOPO_DB_PASSWORD / REDIS_PASSWORD /
 #       SCANOPY_ADMIN_PASSWORD / SCANOPY_POSTGRES_PASSWORD / TOPO_API_TOKEN / ELASTIC_PASSWORD
 #         → 32 字符 A-Za-z0-9;   N9E_SECRET_MASTER_KEY → 64 hex(AES-256)
 #   - etc/tls/{fullchain,privkey}.pem 缺失 → 用宿主 openssl 预签自签证书(CN=N9E_DOMAIN)
@@ -14,7 +14,8 @@
 #   - 设宿主 vm.max_map_count>=262144(ES 硬性要求;能免密 sudo 则自动设,否则打印手动命令)
 #
 # 设计约束:
-#   - 默认 initsql 用 N9E_DB_USER=root,所以 MYSQL_ROOT 和 N9E_DB 必须同一个密码
+#   - n9e / topo-studio 用各自的业务账号(n9e_app / topo_app)连库,由 initsql-extra/f-app-users.sh 创建;
+#     root 只允许容器内本机登录,口令与业务账号互不相同
 #   - 用 awk 重写整个文件,跨平台一致(macOS/Linux 的 sed -i 行为不一样)
 set -euo pipefail
 
@@ -38,6 +39,18 @@ gen_pwd() {
     # 先 head 固定 4 KB 再 tr 过滤(避免 `tr < /dev/urandom | head` 在 pipefail 下被
     # SIGPIPE 失败 — 32 字节远小于 4 KB × ~24% 字母数字命中率,绰绰有余)。
     head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 32
+}
+
+gen_complex() {
+    # 20 位,大小写+数字+至少 2 个符号;符号避开 # $ ` ' " \ / &(# 在 .env 里可能被当注释),
+    # 保证 compose/SQL/awk 都无需转义
+    local p
+    while :; do
+        p="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9@%^*_+=-' | head -c 20)"
+        [[ $p =~ [a-z] && $p =~ [A-Z] && $p =~ [0-9] ]] || continue
+        [ "$(printf '%s' "$p" | tr -dc '@%^*_+=-' | wc -c)" -ge 2 ] && break
+    done
+    printf '%s' "$p"
 }
 
 gen_hex32() {
@@ -87,6 +100,7 @@ fix_mount_perms() {
     # logstash 的 config/pipeline 同为非 root 容器(uid 1000)读的 bind 挂载,
     # 需 o+r(文件)+ o+x(目录);umask 027 的机器 checkout 出来是 640/750,容器读不了。
     chmod -R o+rX "${DIR}/etc/logstash" 2>/dev/null || true
+    chmod -R o+rX "${DIR}/etc/nginx" 2>/dev/null || true
     echo "[init-env] 已修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl/etc/logstash 对 other 可读;tls 私钥不动)"
 }
 
@@ -129,7 +143,9 @@ ensure_es_sysctl() {
 
 if [ "${SKIP_ENV}" = 0 ]; then
 MYSQL_ROOT_PWD="$(gen_pwd)"
-N9E_DB_PWD="${MYSQL_ROOT_PWD}"   # initsql 默认 user=root,两个密码必须相同
+N9E_DB_PWD="$(gen_pwd)"          # n9e 业务账号(n9e_app),只授权 n9e_v6
+TOPO_DB_PWD="$(gen_pwd)"         # topo-studio 业务账号(topo_app),只授权 topo_studio
+ADMIN_PWD="$(gen_complex)"       # 平台 admin 初始密码,替换上游默认弱口令
 REDIS_PWD="$(gen_pwd)"
 SCANOPY_ADMIN_PWD="$(gen_pwd)"   # scanopy 管理员密码,scanopy-bootstrap.sh 用它注册/登录
 SCANOPY_PG_PWD="$(gen_pwd)"      # scanopy 后端 postgres 密码(独立于 n9e mysql)
@@ -139,12 +155,14 @@ ELASTIC_PWD="$(gen_pwd)"          # elastic 超级用户密码(Logstash + n9e ES
 
 # 用 awk 一次性重写,跨平台一致
 # SCANOPY_TOKEN 不在这里生成 — 由部署后跑 ./scanopy-bootstrap.sh 调 scanopy API 拿真 token 后写回
-awk -v mysql="${MYSQL_ROOT_PWD}" -v n9e="${N9E_DB_PWD}" -v redis="${REDIS_PWD}" \
+awk -v mysql="${MYSQL_ROOT_PWD}" -v n9e="${N9E_DB_PWD}" -v topo="${TOPO_DB_PWD}" -v admin="${ADMIN_PWD}" -v redis="${REDIS_PWD}" \
     -v scanopy_admin="${SCANOPY_ADMIN_PWD}" -v scanopy_pg="${SCANOPY_PG_PWD}" \
     -v topo_token="${TOPO_API_TOKEN_VAL}" -v master_key="${MASTER_KEY_VAL}" \
     -v elastic="${ELASTIC_PWD}" '
 /^MYSQL_ROOT_PASSWORD=/       { print "MYSQL_ROOT_PASSWORD=" mysql; next }
 /^N9E_DB_PASSWORD=/           { print "N9E_DB_PASSWORD=" n9e; next }
+/^TOPO_DB_PASSWORD=/          { print "TOPO_DB_PASSWORD=" topo; next }
+/^N9E_ADMIN_PASSWORD=/        { print "N9E_ADMIN_PASSWORD=" admin; next }
 /^REDIS_PASSWORD=/            { print "REDIS_PASSWORD=" redis; next }
 /^SCANOPY_ADMIN_PASSWORD=/    { print "SCANOPY_ADMIN_PASSWORD=" scanopy_admin; next }
 /^SCANOPY_POSTGRES_PASSWORD=/ { print "SCANOPY_POSTGRES_PASSWORD=" scanopy_pg; next }
@@ -157,8 +175,10 @@ awk -v mysql="${MYSQL_ROOT_PWD}" -v n9e="${N9E_DB_PWD}" -v redis="${REDIS_PWD}" 
 chmod 600 "${DST}"
 
 echo "[init-env] 已生成 ${DST} (mode 600)"
-echo "[init-env]   7 个密码/token 已替换为 32 字符强随机(A-Za-z0-9):"
-echo "[init-env]     MYSQL_ROOT_PASSWORD == N9E_DB_PASSWORD (initsql 用 root 账号,必须一致)"
+echo "[init-env]   8 个密码/token 已替换为 32 字符强随机(A-Za-z0-9),互不复用:"
+echo "[init-env]     MYSQL_ROOT_PASSWORD (root 仅容器内本机登录)"
+echo "[init-env]     N9E_DB_PASSWORD / TOPO_DB_PASSWORD (n9e_app / topo_app 业务账号)"
+echo "[init-env]     N9E_ADMIN_PASSWORD (平台 admin 初始密码,20 位含符号;在 .env 中查看)"
 echo "[init-env]     REDIS_PASSWORD"
 echo "[init-env]     SCANOPY_ADMIN_PASSWORD (scanopy-bootstrap.sh 注册/登录用)"
 echo "[init-env]     SCANOPY_POSTGRES_PASSWORD (scanopy 后端 postgres)"
@@ -172,6 +192,9 @@ fi
 
 # --- TLS 自签证书(容器内无法 apk 装 openssl,故在宿主预生成)---
 gen_tls_cert
+
+# --- nginx agent 接口入口日志目录(不存在时由 docker 以 root 创建,运维不便)---
+mkdir -p "${DIR}/logs/nginx"
 
 # --- 修正 bind 挂载文件权限(容器非 root 读取;checkout/pull 会抹掉 o+r)---
 fix_mount_perms

@@ -19,3 +19,8 @@ deepflow/deepflow-ctl
 # server.yaml 是 render-config.sh 从 .env 渲染的生成物(入库的是 .tmpl);
 # 忽略成品,避免装机手改被 checkout/pull 打回默认值。
 deepflow/common/config/deepflow-server/server.yaml
+# init.sql 同理,由 init.sql.tmpl 渲染(含口令)
+deepflow/common/config/mysql/init.sql
+
+# nginx agent 接口入口日志(现场生成,不入库)
+/logs/

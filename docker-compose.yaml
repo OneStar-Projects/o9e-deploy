@@ -21,6 +21,15 @@ services:
     environment:
       TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # root 只建 root@localhost(容器内 socket 登录),不建可远程登录的 root@'%'
+      MYSQL_ROOT_HOST: localhost
+      # 供 initsql-extra/f-app-users.sh 建业务账号
+      N9E_DB_USER:      ${N9E_DB_USER}
+      N9E_DB_PASSWORD:  ${N9E_DB_PASSWORD}
+      TOPO_DB_USER:     ${TOPO_DB_USER}
+      TOPO_DB_PASSWORD: ${TOPO_DB_PASSWORD}
+      # 新部署时替换 admin 的上游默认弱口令(见 f-app-users.sh)
+      N9E_ADMIN_PASSWORD: ${N9E_ADMIN_PASSWORD:-}
     volumes:
       - mysql-data:/var/lib/mysql
       # 上游 schema(批量,initsql/ 是 nightingale/docker/initsql/ 的真目录副本)
@@ -30,10 +39,13 @@ services:
       - ./initsql-extra/d-cfgsync.sql:/docker-entrypoint-initdb.d/d-cfgsync.sql:ro
       # topo-studio 独立库(字典序 e- 在 d- 之后建);仅 CREATE DATABASE,表由 TOPO_DB_MIGRATE 自动建
       - ./initsql-extra/e-topo-studio.sql:/docker-entrypoint-initdb.d/e-topo-studio.sql:ro
+      # 业务专用账号 n9e_app / topo_app(字典序 f- 在建库之后)
+      - ./initsql-extra/f-app-users.sh:/docker-entrypoint-initdb.d/f-app-users.sh:ro
       - ./etc/mysql/my.cnf:/etc/my.cnf:ro
     networks: [n9e]
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      # 走 socket(-h localhost)以 root@localhost 检查;root 不再允许经 TCP 登录
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       # 首次启动 mysql 要走完 initdb(创数据目录 ~90s)+ 跑 a-n9e.sql/d-cfgsync.sql(慢盘下可能 1-2 分钟),
@@ -153,11 +165,10 @@ services:
       - "host.docker.internal:host-gateway"     # 让容器解析 host.docker.internal 到宿主网关
     expose:
       - "60072"
-    # 映射到宿主:供「不在本机的」scanopy daemon 直连 server(daemon poll 出站到 <宿主IP>:60072)。
-    # ⚠ 这会让 scanopy UI 也从宿主端口直接可达(绕过 nginx);仅内网可信网络用。
-    # 只想本机访问改成 "127.0.0.1:60072:60072"。
+    # 默认只绑本机:本机 daemon(host 网络)走 127.0.0.1 即可,UI/API 一律经 nginx 443。
+    # 有「不在本机的」daemon 要直连 server 时,在 .env 设 SCANOPY_BIND=0.0.0.0(会绕过 nginx 暴露明文 HTTP)。
     ports:
-      - "${SCANOPY_PORT:-60072}:60072"
+      - "${SCANOPY_BIND:-127.0.0.1}:${SCANOPY_PORT:-60072}:60072"
     networks: [n9e]
     depends_on:
       scanopy-postgres: { condition: service_healthy }
@@ -206,6 +217,14 @@ services:
       - ./etc/o9e/config.toml.tpl:/app/etc/config.toml.tpl:ro
       - n9e-logs:/app/logs
     networks: [n9e]
+    # 覆盖镜像内置健康检查(启动宽限 20s + 4×15s ≈ 80s):全新部署首启要建 170+ 张表,
+    # 2 核机实测约 4 分钟,内置值会判 unhealthy → 依赖它的 nginx 起不来。放宽到 5 分钟宽限 + 20×15s。
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:17000/api/n9e/version || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 20
+      start_period: 300s
     depends_on:
       mysql:           { condition: service_healthy }
       redis:           { condition: service_healthy }
@@ -214,10 +233,8 @@ services:
     expose:
       - "17000"
       - "20090"
-    # 发布 17000 到宿主:给跑在别的机器上的 categraf agent 直连(remote-write/heartbeat/cfgsync)。
-    # 注意:明文 HTTP 暴露整个 n9e API(含 Web 登录),建议用防火墙把 17000 限制到 agent 来源 IP。
-    ports:
-      - "17000:17000"
+    # 不再直接发布 17000:对外的 17000 由 nginx 接管,只放行 agent 接口(见 etc/nginx/templates/agent-api.conf.template),
+    # 登录与管理 API 不经明文端口暴露。
 
   topo-studio:
     # 复用 n9e 镜像里的第二个二进制;覆盖 entrypoint 直接跑 topo-studio。
@@ -236,9 +253,8 @@ services:
       TOPO_DB_HOST: mysql
       TOPO_DB_PORT: "3306"
       TOPO_DB_NAME: topo_studio
-      TOPO_DB_USER: root
-      # init-env.sh 保证 N9E_DB_PASSWORD == MYSQL_ROOT_PASSWORD,故 root 登录可用
-      TOPO_DB_PASS: ${N9E_DB_PASSWORD}
+      TOPO_DB_USER: ${TOPO_DB_USER}
+      TOPO_DB_PASS: ${TOPO_DB_PASSWORD}
       TOPO_DB_MIGRATE: "true"
       SCANOPY_URL: http://scanopy:60072
       SCANOPY_TOKEN: ${SCANOPY_TOKEN:-}
@@ -327,8 +343,15 @@ services:
       TZ: Asia/Shanghai
       # auto-cert.sh 用,缺证书自动签时的 CN/SAN 来源(优先用配置的域名,否则 o9e.local)
       AUTO_CERT_CN: ${N9E_DOMAIN:-o9e.local}
+      # 17000 agent 接口入口:1=非 agent 接口返回 403(默认,6456 实测 14 台 agent 请求全在放行列表);
+      # 0=只记录不拦截(排障时用)
+      AGENT_API_ENFORCE: ${AGENT_API_ENFORCE:-1}
+      # 模板渲染到 /etc/nginx(conf.d 是只读挂载,写不进去)
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
     volumes:
       - ./etc/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./etc/nginx/templates:/etc/nginx/templates:ro
+      - ./logs/nginx:/var/log/agent-api
       - ./etc/nginx/conf.d:/etc/nginx/conf.d:ro
       # tls 目录不能 :ro — auto-cert.sh 缺证书时需要在这里写入新生成的 fullchain/privkey
       - ./etc/tls:/etc/nginx/tls
@@ -336,9 +359,15 @@ services:
       # 在 nginx -g 启动前跑;05- 前缀让它在内置 10-listen-on-ipv6 之前执行。
       - ./etc/nginx/auto-cert.sh:/docker-entrypoint.d/05-auto-cert.sh:ro
     ports:
-      - "${HTTP_PORT:-80}:80"
+      # 对外只开 443。80 仅做跳转、20090 是 ibex 远程执行(agent 未启用),默认只绑本机;
+      # 需要时在 .env 设 HTTP_BIND / IBEX_RPC_BIND=0.0.0.0。
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
-      - "${IBEX_RPC_PORT:-20090}:20090"
+      - "${IBEX_RPC_BIND:-127.0.0.1}:${IBEX_RPC_PORT:-20090}:20090"
+      # agent 上报入口(只放行 agent 接口)
+      - "${AGENT_API_PORT:-17000}:17000"
+    # 只等 n9e 容器启动,不等健康:nginx 只是反代,n9e 未就绪时短暂返回 502 即可。
+    # 等健康会让全新部署(n9e 首启建表数分钟)时 compose up 判依赖失败、nginx 停在 created(6456 两轮实测)。
     depends_on:
-      n9e: { condition: service_healthy }
+      n9e: { condition: service_started }
     networks: [n9e]

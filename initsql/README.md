@@ -29,3 +29,8 @@ git add deploy/single-node/initsql/
 fork 自己的增量改动放 `deploy/single-node/initsql-extra/d-*.sql`,字典序在
 上游 `a-/c-*.sql` 之后跑。docker-compose 已经把两套都 mount 进
 `/docker-entrypoint-initdb.d/`,mysql 按文件名顺序自然执行。
+
+> **本仓库对上游的唯一改动**(2026-10 安全加固):`a-n9e.sql` 第 28 行 admin 的初始口令由上游默认弱口令改为占位串
+> `__set_by_f_app_users__`,新部署时由 `initsql-extra/f-app-users.sh` 在 n9e 首启前替换成 `.env` 的 `N9E_ADMIN_PASSWORD`。
+> 从上游同步本目录时**保留这一处**,否则客户安全审计会扫出默认弱口令。
+
