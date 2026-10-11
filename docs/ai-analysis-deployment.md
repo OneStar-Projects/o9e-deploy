@@ -1,12 +1,11 @@
 # 自然语言查询与运维周报部署
 
-功能包含在新 n9e 镜像，复用现有 MySQL 和 Redis，无独立报告/查询容器。`.env.example` 已列出新参数；默认两个开关都是 false。
+功能包含在新 n9e 镜像，复用现有 MySQL 和 Redis，无独立报告/查询容器。`.env.example` 已列出新参数；自然语言查询默认开启并受已启用默认 LLM 控制；报告开关仍默认关闭。现有 `.env` 若明确设置查询为 false，会继续手动关闭，需按本站意愿调整。
 
-启用前必须现场验证 VM 租户路由、所选数据源业务组绑定与 ident 隔离；共享采集器的设备指标不能都使用采集器 ident。验证通过的来源 ID 才能加入 `O9E_NATURAL_QUERY_VERIFIED_DATASOURCE_IDS`（逗号分隔）。
+启用前必须现场验证 VM 租户路由、所选数据源业务组绑定与 ident 隔离；共享采集器的设备指标不能都使用采集器 ident。自然语言查询默认开启，但只有配置了已启用的默认 LLM 才开放；所有兼容且有权限的数据源自动支持，后端逐次检查数据源、业务组和资源权限，不再配置额外白名单。设 `O9E_NATURAL_QUERY_ENABLED=false` 可手动关闭。旧白名单环境变量不再由 Compose 转发。
 
 ```dotenv
 O9E_NATURAL_QUERY_ENABLED=true
-O9E_NATURAL_QUERY_VERIFIED_DATASOURCE_IDS=3
 O9E_NATURAL_QUERY_TTL_SECONDS=900
 O9E_NATURAL_QUERY_TIMEOUT_SECONDS=90
 O9E_NATURAL_QUERY_MAX_ACTIVE=128
@@ -14,7 +13,7 @@ O9E_REPORTS_ENABLED=true
 O9E_REPORTS_RETENTION_DAYS=90
 ```
 
-示例 ID 需替换。自然语言入口还要求角色有 `/metric/explorer`；趋势提议需要 `/trend-analysis` 和 `/forecast/modify`；报告查看需要 `/reports`，创建/共享/调度需要 `/reports/modify`，写操作要求所选业务组 rw。角色迁移增加权限项后，管理员需按需授权。
+自然语言入口还要求角色有 `/metric/explorer`；趋势提议需要 `/trend-analysis` 和 `/forecast/modify`；报告查看需要 `/reports`，创建/共享/调度需要 `/reports/modify`，写操作要求所选业务组 rw。角色迁移增加权限项后，管理员需按需授权。
 
 发布使用已有镜像构建/拉取流程；新报告表由 n9e 增量迁移创建。先备份 MySQL，再对真实版本进行迁移验收；本地 SQLite 迁移回归不能代替生产 MySQL 验收。
 

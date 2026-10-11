@@ -24,3 +24,7 @@ deepflow/common/config/mysql/init.sql
 
 # nginx agent 接口入口日志(现场生成,不入库)
 /logs/
+# Docker creates these empty child mountpoints in the writable init SQL directory.
+# The actual scripts are tracked in initsql-extra/.
+/initsql/d-cfgsync.sql
+/initsql/e-topo-studio.sql

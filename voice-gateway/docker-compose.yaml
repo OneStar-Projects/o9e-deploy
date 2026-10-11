@@ -1,0 +1,40 @@
+services:
+  voice-gateway:
+    image: fuqiangleon/o9e-voice:${VOICE_TAG:?set a fixed VOICE_TAG}
+    restart: unless-stopped
+    environment:
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-google}
+      VOICE_MODEL: ${VOICE_MODEL:-}
+      VOICE_VOICE: ${VOICE_VOICE:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TRANSCRIPTION_MODEL: ${OPENAI_TRANSCRIPTION_MODEL:-gpt-4o-mini-transcribe}
+      VOICE_GUARDRAIL_MODEL: ${VOICE_GUARDRAIL_MODEL:-}
+      VOICE_GUARDRAIL_TIMEOUT_MS: ${VOICE_GUARDRAIL_TIMEOUT_MS:-8000}
+      VOICE_GUARDRAIL_MAX_CHECKS: ${VOICE_GUARDRAIL_MAX_CHECKS:-200}
+      VOICE_UPSTREAM_PROXY: ${VOICE_UPSTREAM_PROXY:-}
+      O9E_VOICE_CLIENT_ID: ${O9E_VOICE_CLIENT_ID:-o9e}
+      O9E_VOICE_GATEWAY_TOKEN: ${O9E_VOICE_GATEWAY_TOKEN:?set the shared gateway service secret}
+      VOICE_MAX_SESSIONS: ${VOICE_MAX_SESSIONS:-5}
+      VOICE_MAX_SECONDS: ${VOICE_MAX_SECONDS:-1200}
+      VOICE_MAX_USAGE_TOKENS: ${VOICE_MAX_USAGE_TOKENS:-200000}
+      VOICE_IDLE_SECONDS: ${VOICE_IDLE_SECONDS:-120}
+    expose: ["8090"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 1.0
+  nginx:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    ports: ["${VOICE_HTTPS_PORT:-443}:443"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./tls:/etc/nginx/tls:ro
+    depends_on:
+      voice-gateway: { condition: service_healthy }
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      options: { max-size: "10m", max-file: "3" }
