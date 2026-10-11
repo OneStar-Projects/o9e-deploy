@@ -83,7 +83,8 @@ printf '%s\n' "${ADMIN_SQL}" | q_stdin "${TMP}/n9e.env" "${N9E_DB_USER}" "${N9E_
 if [ "${DB_TYPE}" = postgres ]; then
     echo "[ext-db] 4. 写入 .env 的 N9E_DB_DSN"
     dsn="host=${DB_HOST} port=${DB_PORT} user=${N9E_DB_USER} password=${N9E_DB_PASSWORD} dbname=${N9E_DB_NAME} sslmode=disable"
-    awk -v dsn="${dsn}" 'BEGIN{done=0} /^N9E_DB_DSN=/{print "N9E_DB_DSN=" dsn; done=1; next} {print} END{if(!done) print "N9E_DB_DSN=" dsn}' .env > "${TMP}/env" \
+    # 值含空格,必须加双引号:否则 `. ./.env` 时 shell 会把它拆成多个变量,连接串被截断
+    awk -v dsn="${dsn}" 'BEGIN{done=0} /^N9E_DB_DSN=/{print "N9E_DB_DSN=\"" dsn "\""; done=1; next} {print} END{if(!done) print "N9E_DB_DSN=\"" dsn "\""}' .env > "${TMP}/env" \
         && cat "${TMP}/env" > .env && chmod 600 .env
 else
     echo "[ext-db] 4. MySQL 连接串由 compose 按 DB_HOST / DB_PORT 自动拼接,无需写入"
