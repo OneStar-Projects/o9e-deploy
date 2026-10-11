@@ -78,6 +78,9 @@ docker compose logs -f n9e
 管理员账号 `admin`,初始密码是 `.env` 里的 `N9E_ADMIN_PASSWORD`(20 位,含符号;上游默认密码已在初始化时替换)。
 n9e **不会强制改密**,交付前按需在页面修改,任何账号都不要用默认/简单密码(客户安全审计会扫弱口令)。
 
+**使用客户提供的数据库**(MySQL / PostgreSQL / 金仓 PG 兼容模式):不启动内置 MySQL,由 DBA 建库建账号后执行
+`./external-db-init.sh`,步骤与要求见 [`docs/external-db.md`](docs/external-db.md)。
+
 全新部署**没有时序库数据源**:用 `dashboards/import-dashboards.sh` 导入仪表盘时会自动创建,
 或在页面「数据源」中添加 `http://victoriametrics:8428`。
 
@@ -339,6 +342,9 @@ o9e-deploy/
 ├── initsql/                     ← 上游 schema 真目录(自包含;a-n9e.sql 的 admin 初始值已改为占位串,同步上游时保留)
 ├── initsql-extra/               ← fork 的增量 SQL + f-app-users.sh(建业务账号、替换 admin 初始密码)
 ├── docs/security-backlog.md     ← 安全问题清单(已处理 / 未处理)
+├── docs/external-db.md          ← 使用外部数据库(MySQL / PostgreSQL / 金仓)的 DBA 要求与部署步骤
+├── external-db-init.sh          ← 外部数据库首次初始化(按 DB_TYPE 适配)
+├── initsql-pg/                  ← PostgreSQL / 金仓版初始化 SQL(外部 PG 库用)
 └── deepflow/                    ← 独立 DeepFlow server 栈(采集机部署;业务服务拓扑数据源)
     ├── docker-compose.yaml      #   端口预置 17001/17002
     ├── .env.example

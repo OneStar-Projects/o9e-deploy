@@ -193,6 +193,16 @@ fi
 # --- TLS 自签证书(容器内无法 apk 装 openssl,故在宿主预生成)---
 gen_tls_cert
 
+# --- 升级兼容:老 .env 没有 COMPOSE_PROFILES 且未配置外部数据库 → 补 builtin-db,内置 MySQL 照常启动 ---
+if [ -f "${DST}" ] && ! grep -qE '^COMPOSE_PROFILES=' "${DST}"; then
+    if grep -qE '^DB_HOST=.+' "${DST}" && ! grep -qE '^DB_HOST=mysql$' "${DST}"; then
+        echo "[init-env] WARN: .env 配了外部数据库(DB_HOST)但没有 COMPOSE_PROFILES,请确认是否需要内置 MySQL" >&2
+    else
+        printf '\n# 升级自动补充:继续使用内置 MySQL(外部数据库见 .env.example 数据库段)\nCOMPOSE_PROFILES=builtin-db\n' >> "${DST}"
+        echo "[init-env] 已在 .env 补充 COMPOSE_PROFILES=builtin-db(继续使用内置 MySQL)"
+    fi
+fi
+
 # --- nginx agent 接口入口日志目录(不存在时由 docker 以 root 创建,运维不便)---
 mkdir -p "${DIR}/logs/nginx"
 

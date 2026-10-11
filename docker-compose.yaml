@@ -16,6 +16,9 @@ volumes:
 services:
   mysql:
     image: mysql:8.0
+    # 内置 MySQL,属于 builtin-db profile(.env 默认 COMPOSE_PROFILES=builtin-db)。
+    # 使用外部数据库(客户提供的 MySQL / PostgreSQL / 金仓)时从 COMPOSE_PROFILES 去掉 builtin-db,本服务不再启动。
+    profiles: ["builtin-db"]
     container_name: o9e-mysql
     restart: always
     environment:
@@ -193,6 +196,10 @@ services:
       GIN_MODE: release
       N9E_DB_USER:     ${N9E_DB_USER}
       N9E_DB_PASSWORD: ${N9E_DB_PASSWORD}
+      # 数据库类型与连接串(渲染进 config.toml [DB])。默认连内置 MySQL;
+      # 外部 PostgreSQL / 金仓由 ./external-db-init.sh 生成 N9E_DB_DSN 写入 .env。
+      DB_TYPE:    ${DB_TYPE:-mysql}
+      N9E_DB_DSN: ${N9E_DB_DSN:-${N9E_DB_USER}:${N9E_DB_PASSWORD}@tcp(${DB_HOST:-mysql}:${DB_PORT:-3306})/${N9E_DB_NAME:-n9e_v6}?charset=utf8mb4&parseTime=True&loc=Local}
       REDIS_PASSWORD:  ${REDIS_PASSWORD}
       # entrypoint 的 envsubst 用,渲染进 config.toml 的 [Center] ScanopyToken
       SCANOPY_TOKEN:   ${SCANOPY_TOKEN:-}
@@ -231,7 +238,8 @@ services:
       retries: 20
       start_period: 300s
     depends_on:
-      mysql:           { condition: service_healthy }
+      # 外部数据库时内置 mysql 不启用,required: false 让依赖自动跳过
+      mysql:           { condition: service_healthy, required: false }
       redis:           { condition: service_healthy }
       victoriametrics: { condition: service_healthy }
       scanopy:         { condition: service_healthy }
@@ -254,10 +262,11 @@ services:
       TOPO_SERVER_HOST: "0.0.0.0"
       TOPO_SERVER_PORT: "38123"
       TOPO_API_TOKEN:   ${TOPO_API_TOKEN:-}
-      TOPO_STORE_DRIVER: mysql
-      TOPO_DB_HOST: mysql
-      TOPO_DB_PORT: "3306"
-      TOPO_DB_NAME: topo_studio
+      # 与 n9e 用同一个数据库实例(DB_TYPE / DB_HOST / DB_PORT),库名与账号独立
+      TOPO_STORE_DRIVER: ${DB_TYPE:-mysql}
+      TOPO_DB_HOST: ${DB_HOST:-mysql}
+      TOPO_DB_PORT: ${DB_PORT:-3306}
+      TOPO_DB_NAME: ${TOPO_DB_NAME:-topo_studio}
       TOPO_DB_USER: ${TOPO_DB_USER}
       TOPO_DB_PASS: ${TOPO_DB_PASSWORD}
       TOPO_DB_MIGRATE: "true"
@@ -269,7 +278,7 @@ services:
       SCANOPY_SESSION_PASSWORD: ${SCANOPY_ADMIN_PASSWORD:-}
     networks: [n9e]
     depends_on:
-      mysql:   { condition: service_healthy }
+      mysql:   { condition: service_healthy, required: false }
       scanopy: { condition: service_healthy }
     expose:
       - "38123"

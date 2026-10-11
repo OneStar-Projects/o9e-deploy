@@ -40,8 +40,10 @@ Enable = true
 OpenRSA = false
 
 [DB]
-DBType = "mysql"
-DSN = "${N9E_DB_USER}:${N9E_DB_PASSWORD}@tcp(mysql:3306)/n9e_v6?charset=utf8mb4&parseTime=True&loc=Local"
+# 由 compose 传入:DB_TYPE = mysql | postgres(PostgreSQL / 金仓 PG 兼容模式);
+# N9E_DB_DSN 默认指向内置 MySQL,外部数据库时由 ./external-db-init.sh 写入 .env。
+DBType = "${DB_TYPE}"
+DSN = "${N9E_DB_DSN}"
 
 [Redis]
 Address  = "redis:6379"
