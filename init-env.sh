@@ -41,6 +41,20 @@ gen_pwd() {
     head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 32
 }
 
+gen_dbpwd() {
+    # 数据库业务账号口令:32 位,含大小写字母、数字(≥2)和安全符号(≥1)。
+    # 须满足金仓 passwordcheck(客户实例实测要求:长度≥10、数字≥2、字母≥2、符号≥1);
+    # 符号只用 _ + = -,在 MySQL DSN(user:pass@tcp)、PG 连接串、SQL 单引号、compose .env 里都无需转义。
+    local p
+    while :; do
+        p="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9_+=-' | head -c 32)"
+        [[ $p =~ [a-z] && $p =~ [A-Z] ]] || continue
+        [ "$(printf '%s' "$p" | tr -dc '0-9' | wc -c)" -ge 2 ] || continue
+        [ "$(printf '%s' "$p" | tr -dc '_+=-' | wc -c)" -ge 1 ] && break
+    done
+    printf '%s' "$p"
+}
+
 gen_complex() {
     # 20 位,大小写+数字+至少 2 个符号;符号避开 # $ ` ' " \ / &(# 在 .env 里可能被当注释),
     # 保证 compose/SQL/awk 都无需转义
@@ -143,8 +157,8 @@ ensure_es_sysctl() {
 
 if [ "${SKIP_ENV}" = 0 ]; then
 MYSQL_ROOT_PWD="$(gen_pwd)"
-N9E_DB_PWD="$(gen_pwd)"          # n9e 业务账号(n9e_app),只授权 n9e_v6
-TOPO_DB_PWD="$(gen_pwd)"         # topo-studio 业务账号(topo_app),只授权 topo_studio
+N9E_DB_PWD="$(gen_dbpwd)"        # n9e 业务账号(n9e_app),只授权 n9e_v6;含符号以满足金仓口令复杂度
+TOPO_DB_PWD="$(gen_dbpwd)"       # topo-studio 业务账号(topo_app),只授权 topo_studio
 ADMIN_PWD="$(gen_complex)"       # 平台 admin 初始密码,替换上游默认弱口令
 REDIS_PWD="$(gen_pwd)"
 SCANOPY_ADMIN_PWD="$(gen_pwd)"   # scanopy 管理员密码,scanopy-bootstrap.sh 用它注册/登录

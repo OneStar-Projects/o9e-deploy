@@ -24,6 +24,11 @@ case "${DB_TYPE}" in mysql|postgres) ;; *) echo "[ext-db] DB_TYPE 只能是 mysq
 : "${DB_HOST:?}" "${DB_PORT:?}" "${N9E_DB_USER:?}" "${N9E_DB_PASSWORD:?}" "${TOPO_DB_USER:?}" "${TOPO_DB_PASSWORD:?}" "${N9E_ADMIN_PASSWORD:?}"
 N9E_DB_NAME="${N9E_DB_NAME:-n9e_v6}"; TOPO_DB_NAME="${TOPO_DB_NAME:-topo_studio}"
 [ ${#N9E_ADMIN_PASSWORD} -le 31 ] || { echo "[ext-db] N9E_ADMIN_PASSWORD 须 ≤31 位" >&2; exit 1; }
+# 口令会写进 SQL 字面量与连接串:含空白、引号、反斜杠、$、` 会破坏语句(或被注入),直接拒绝
+for v in N9E_DB_PASSWORD TOPO_DB_PASSWORD N9E_ADMIN_PASSWORD; do
+    case "${!v}" in *[[:space:]\'\"\\\$\`]*) echo "[ext-db] ${v} 含空白/引号/反斜杠/\$/反引号,请改用其它符号" >&2; exit 1;; esac
+done
+DB_SSLMODE="${DB_SSLMODE:-prefer}"
 case "${COMPOSE_PROFILES:-}" in *builtin-db*) echo "[ext-db] WARN: COMPOSE_PROFILES 仍含 builtin-db,内置 MySQL 也会启动" >&2;; esac
 
 TMP="$(mktemp -d)"; chmod 700 "${TMP}"; trap 'rm -rf "${TMP}"' EXIT
@@ -82,7 +87,7 @@ printf '%s\n' "${ADMIN_SQL}" | q_stdin "${TMP}/n9e.env" "${N9E_DB_USER}" "${N9E_
 
 if [ "${DB_TYPE}" = postgres ]; then
     echo "[ext-db] 4. 写入 .env 的 N9E_DB_DSN"
-    dsn="host=${DB_HOST} port=${DB_PORT} user=${N9E_DB_USER} password=${N9E_DB_PASSWORD} dbname=${N9E_DB_NAME} sslmode=disable"
+    dsn="host=${DB_HOST} port=${DB_PORT} user=${N9E_DB_USER} password=${N9E_DB_PASSWORD} dbname=${N9E_DB_NAME} sslmode=${DB_SSLMODE}"
     # 值含空格,必须加双引号:否则 `. ./.env` 时 shell 会把它拆成多个变量,连接串被截断
     awk -v dsn="${dsn}" 'BEGIN{done=0} /^N9E_DB_DSN=/{print "N9E_DB_DSN=\"" dsn "\""; done=1; next} {print} END{if(!done) print "N9E_DB_DSN=\"" dsn "\""}' .env > "${TMP}/env" \
         && cat "${TMP}/env" > .env && chmod 600 .env

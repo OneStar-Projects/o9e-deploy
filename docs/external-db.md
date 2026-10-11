@@ -51,6 +51,24 @@ GRANT ALL PRIVILEGES ON topo_studio.* TO 'topo_app'@'<平台主机IP>';
 
 3. 把 **地址、端口、两个账号的口令** 交给部署人员。
 
+### DBA 安全加固清单(金仓 / PostgreSQL)
+
+2026-10-12 对客户金仓实例(只读)与金仓默认安装的审查结论,交付前逐项确认:
+
+| # | 项 | 要求 | 说明 |
+|---|---|---|---|
+| 1 | **内置管理员 `sso`、`sao` 的口令** | **必须改为复杂口令** | 金仓默认安装这两个账号口令为公开默认值,可直接登录 `security` 库(已在同版本实测);客户审计必扫 |
+| 2 | 其它内置 / 运维账号(如 `kmonitor`) | 确认用途,口令为复杂口令,不用则禁用 | |
+| 3 | 口令复杂度与登录失败锁定 | 保持开启(`passwordcheck`、`sys_audlog`) | 客户实例已开启:长度≥10、数字≥2、字母≥2、符号≥1,连续 5 次失败锁定 |
+| 4 | **传输加密** | 开启 SSL(`ssl = on` 并配置证书),平台侧随后把 `.env` 的 `DB_SSLMODE` 改为 `require` | 未开启时平台与数据库之间口令和数据均为明文 |
+| 5 | **来源地址限制** | `sys_hba.conf` 中 `n9e_v6`、`topo_studio` 只允许平台主机 IP;去掉 `0.0.0.0/0` 的通配 | 默认任何地址都可以尝试登录 |
+| 6 | 业务库 public schema | `REVOKE CREATE ON SCHEMA public FROM PUBLIC;`(分别在 `n9e_v6`、`topo_studio` 内执行) | 防止其它账号在业务库里建对象 |
+| 7 | 内置库公共连接 | `REVOKE CONNECT ON DATABASE kingbase, security, test FROM PUBLIC;` | 默认所有账号都能连这些库 |
+| 8 | 审计与连接日志 | 保持开启(`log_connections`、`sysaudit`) | 客户实例已开启 |
+
+平台侧已做的:业务账号非超级用户、不能建库建角色、只能连自己的库;`init-env.sh` 生成的口令满足上述复杂度
+(32 位,含大小写、≥2 位数字、≥1 个符号);`external-db-init.sh` 拒绝含空白 / 引号 / 反斜杠 / `$` / 反引号的口令。
+
 ## 三、部署人员操作
 
 ```bash

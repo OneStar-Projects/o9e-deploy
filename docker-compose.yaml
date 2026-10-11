@@ -267,6 +267,8 @@ services:
       TOPO_DB_HOST: ${DB_HOST:-mysql}
       TOPO_DB_PORT: ${DB_PORT:-3306}
       TOPO_DB_NAME: ${TOPO_DB_NAME:-topo_studio}
+      # PG / 金仓连接参数(MySQL 不使用):sslmode 与 n9e 一致
+      TOPO_DB_PG_PARAMS: sslmode=${DB_SSLMODE:-prefer}
       TOPO_DB_USER: ${TOPO_DB_USER}
       TOPO_DB_PASS: ${TOPO_DB_PASSWORD}
       TOPO_DB_MIGRATE: "true"
