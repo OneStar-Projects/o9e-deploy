@@ -27,6 +27,8 @@ N9E_DB_NAME="${N9E_DB_NAME:-n9e_v6}"; TOPO_DB_NAME="${TOPO_DB_NAME:-topo_studio}
 case "${COMPOSE_PROFILES:-}" in *builtin-db*) echo "[ext-db] WARN: COMPOSE_PROFILES 仍含 builtin-db,内置 MySQL 也会启动" >&2;; esac
 
 TMP="$(mktemp -d)"; chmod 700 "${TMP}"; trap 'rm -rf "${TMP}"' EXIT
+# 客户端容器加入的 docker 网络:数据库是可路由 IP 时保持默认;数据库也是本机容器时设为它所在的网络
+NET_ARGS=(); [ -n "${INIT_DOCKER_NETWORK:-}" ] && NET_ARGS=(--network "${INIT_DOCKER_NETWORK}")
 ADMIN_SQL="UPDATE users SET password = '${N9E_ADMIN_PASSWORD}' WHERE username = 'admin' AND LENGTH(password) < 32;"
 
 if [ "${DB_TYPE}" = postgres ]; then
@@ -35,7 +37,7 @@ if [ "${DB_TYPE}" = postgres ]; then
     IMG="${PSQL_IMAGE:-postgres:17-alpine}"
     q() { # envfile user db [psql 参数...]
         local envf=$1 user=$2 db=$3; shift 3
-        docker run --rm -i --env-file "${envf}" -v "${DIR}/initsql-pg:/initsql:ro" "${IMG}" \
+        docker run --rm -i ${NET_ARGS[@]+"${NET_ARGS[@]}"} --env-file "${envf}" -v "${DIR}/initsql-pg:/initsql:ro" "${IMG}" \
             psql "host=${DB_HOST} port=${DB_PORT} user=${user} dbname=${db} connect_timeout=10" -v ON_ERROR_STOP=1 "$@"
     }
     q_val()   { q "$1" "$2" "$3" -Atc "$4"; }
@@ -50,7 +52,7 @@ else
     IMG="${MYSQL_CLIENT_IMAGE:-mysql:8.0}"
     q() { # envfile user db [mysql 参数...]
         local envf=$1 user=$2 db=$3; shift 3
-        docker run --rm -i --env-file "${envf}" -v "${DIR}/initsql:/initsql:ro" -v "${DIR}/initsql-extra:/initsql-extra:ro" "${IMG}" \
+        docker run --rm -i ${NET_ARGS[@]+"${NET_ARGS[@]}"} --env-file "${envf}" -v "${DIR}/initsql:/initsql:ro" -v "${DIR}/initsql-extra:/initsql-extra:ro" "${IMG}" \
             mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${user}" --connect-timeout=10 --default-character-set=utf8mb4 "${db}" "$@"
     }
     q_val()   { q "$1" "$2" "$3" -Nse "$4"; }
