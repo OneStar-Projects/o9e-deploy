@@ -48,30 +48,40 @@ PSQL_IMAGE = os.environ.get('PSQL_IMAGE', 'postgres:17-alpine')
 HOST, PORT = ENV['DB_HOST'], ENV['DB_PORT']
 SSLMODE = ENV.get('DB_SSLMODE', 'prefer')
 
-TMP = tempfile.mkdtemp(prefix='migrate-')
-os.chmod(TMP, 0o700)
+# 常驻一个 psql 客户端容器,所有目标库操作都 docker exec 进去(每次新起容器要数秒,表多时是主要耗时)。
+# 两个业务账号口令经 --env-file 注入容器环境变量,exec 时在容器内取用,不出现在命令行。
+HELPER = 'o9e-migrate-psql-%d' % os.getpid()
 
 
-def env_file(name, password):
-    p = os.path.join(TMP, name)
-    with open(p, 'w') as f:
-        f.write('PGPASSWORD=%s\n' % password)
-    os.chmod(p, 0o600)
-    return p
-
-
-def psql_cmd(db, user, envf, extra):
-    cmd = ['docker', 'run', '--rm', '-i']
+def start_helper():
+    tmp = tempfile.mkdtemp(prefix='migrate-')
+    os.chmod(tmp, 0o700)
+    envf = os.path.join(tmp, 'pg.env')
+    with open(envf, 'w') as f:
+        f.write('PW_N9E=%s\nPW_TOPO=%s\n' % (ENV['N9E_DB_PASSWORD'], ENV['TOPO_DB_PASSWORD']))
+    os.chmod(envf, 0o600)
+    cmd = ['docker', 'run', '-d', '--rm', '--name', HELPER, '--env-file', envf]
     if NET:
         cmd += ['--network', NET]
-    cmd += ['--env-file', envf, PSQL_IMAGE, 'psql',
+    r = subprocess.run(cmd + [PSQL_IMAGE, 'sleep', '86400'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       universal_newlines=True)
+    subprocess.run(['rm', '-rf', tmp])
+    if r.returncode != 0:
+        sys.exit('[migrate] 启动 psql 客户端容器失败: %s' % r.stderr.strip()[:300])
+
+
+def stop_helper():
+    subprocess.run(['docker', 'rm', '-f', HELPER], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def psql_cmd(db, user, pwvar, extra):
+    return ['docker', 'exec', '-i', HELPER, 'sh', '-c', 'PGPASSWORD="$%s" exec psql "$@"' % pwvar, 'psql',
             'host=%s port=%s user=%s dbname=%s sslmode=%s connect_timeout=10' % (HOST, PORT, user, db, SSLMODE),
             '-v', 'ON_ERROR_STOP=1', '-q'] + extra
-    return cmd
 
 
-def pg_query(db, user, envf, sql):
-    r = subprocess.run(psql_cmd(db, user, envf, ['-At', '-F', '\t', '-c', sql]),
+def pg_query(db, user, pwvar, sql):
+    r = subprocess.run(psql_cmd(db, user, pwvar, ['-At', '-F', '\t', '-c', sql]),
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     if r.returncode != 0:
         raise RuntimeError('目标库执行失败: %s' % r.stderr.strip()[:300])
@@ -106,11 +116,10 @@ def col_expr(col, pg_type):
             r"CHAR(9), '\\t'), CHAR(10), '\\n'), CHAR(13), '\\r'), CHAR(0), ''), '\\N')" % c)
 
 
-def migrate_db(src_db, tgt_db, user, password):
-    envf = env_file('%s.env' % tgt_db, password)
+def migrate_db(src_db, tgt_db, user, pwvar):
     print('[migrate] ===== %s → %s(%s@%s:%s)' % (src_db, tgt_db, user, HOST, PORT))
     tgt_cols = {}
-    for t, c, typ in pg_query(tgt_db, user, envf,
+    for t, c, typ in pg_query(tgt_db, user, pwvar,
                               "SELECT table_name, column_name, data_type FROM information_schema.columns "
                               "WHERE table_schema='public' ORDER BY table_name, ordinal_position"):
         tgt_cols.setdefault(t, []).append((c, typ))
@@ -128,10 +137,16 @@ def migrate_db(src_db, tgt_db, user, password):
         print('[migrate] 目标有源无(保持为空):%s' % ', '.join(only_tgt))
 
     # 清空目标表(建表时写入的默认数据)并重置序列
-    pg_query(tgt_db, user, envf, 'TRUNCATE %s RESTART IDENTITY CASCADE' % ', '.join('"%s"' % t for t in tables))
+    pg_query(tgt_db, user, pwvar, 'TRUNCATE %s RESTART IDENTITY CASCADE' % ', '.join('"%s"' % t for t in tables))
+
+    # 源表行数一次查完,空表无需复制(目标已清空)
+    n_pre = dict((r[0], int(r[1])) for r in my_query(src_db, ' UNION ALL '.join(
+        "SELECT '%s', COUNT(*) FROM `%s`" % (t, t) for t in tables)))
 
     total, problems = 0, []
     for t in tables:
+        if not n_pre[t]:
+            continue
         cols = [(c, typ) for c, typ in tgt_cols[t] if c in src_cols[t]]
         skipped = sorted(src_cols[t] - set(c for c, _ in tgt_cols[t]))
         sel = "SELECT CONCAT_WS(CHAR(9), %s) FROM `%s`" % (', '.join(col_expr(c, typ) for c, typ in cols), t)
@@ -139,7 +154,7 @@ def migrate_db(src_db, tgt_db, user, password):
         t0 = time.time()
         src = subprocess.Popen(mysql_cmd(src_db), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE)
-        dst = subprocess.Popen(psql_cmd(tgt_db, user, envf, ['-c', copy]), stdin=src.stdout,
+        dst = subprocess.Popen(psql_cmd(tgt_db, user, pwvar, ['-c', copy]), stdin=src.stdout,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         src.stdin.write((sel + ';\n').encode('utf-8'))
         src.stdin.close()
@@ -153,7 +168,7 @@ def migrate_db(src_db, tgt_db, user, password):
                                                  derr.decode(errors='replace').strip()[:300]))
             continue
         n_src = int(my_query(src_db, 'SELECT COUNT(*) FROM `%s`' % t)[0][0])
-        n_tgt = int(pg_query(tgt_db, user, envf, 'SELECT COUNT(*) FROM "%s"' % t)[0][0])
+        n_tgt = int(pg_query(tgt_db, user, pwvar, 'SELECT COUNT(*) FROM "%s"' % t)[0][0])
         total += n_tgt
         mark = '✓' if n_src == n_tgt else '!! 行数不一致'
         if n_src != n_tgt:
@@ -164,14 +179,14 @@ def migrate_db(src_db, tgt_db, user, password):
                 ('  (源多出列已跳过:%s)' % ','.join(skipped)) if skipped else ''))
 
     # 自增序列设为当前最大值,避免新数据撞号
-    seqs = pg_query(tgt_db, user, envf,
+    seqs = pg_query(tgt_db, user, pwvar,
                     "SELECT table_name, column_name FROM information_schema.columns "
                     "WHERE table_schema='public' AND column_default LIKE 'nextval(%%'")
-    for t, c in seqs:
-        if t in tables:
-            pg_query(tgt_db, user, envf,
-                     "SELECT setval(pg_get_serial_sequence('\"%s\"', '%s'), "
-                     "COALESCE((SELECT MAX(\"%s\") FROM \"%s\"), 0) + 1, false)" % (t, c, c, t))
+    seqs = [(t, c) for t, c in seqs if t in tables]
+    if seqs:
+        pg_query(tgt_db, user, pwvar, '; '.join(
+            "SELECT setval(pg_get_serial_sequence('\"%s\"', '%s'), "
+            "COALESCE((SELECT MAX(\"%s\") FROM \"%s\"), 0) + 1, false)" % (t, c, c, t) for t, c in seqs))
     print('[migrate] %s:%d 张表、%d 行;重置序列 %d 个;问题表 %d 个%s' % (
         tgt_db, len(tables), total, len(seqs), len(problems),
         (':' + ', '.join(problems)) if problems else ''))
@@ -180,10 +195,13 @@ def migrate_db(src_db, tgt_db, user, password):
 
 if __name__ == '__main__':
     t0 = time.time()
-    bad = migrate_db(ENV.get('N9E_DB_NAME', 'n9e_v6'), ENV.get('N9E_DB_NAME', 'n9e_v6'),
-                     ENV['N9E_DB_USER'], ENV['N9E_DB_PASSWORD'])
-    bad += migrate_db(ENV.get('TOPO_DB_NAME', 'topo_studio'), ENV.get('TOPO_DB_NAME', 'topo_studio'),
-                      ENV['TOPO_DB_USER'], ENV['TOPO_DB_PASSWORD'])
-    subprocess.run(['rm', '-rf', TMP])
+    start_helper()
+    try:
+        bad = migrate_db(ENV.get('N9E_DB_NAME', 'n9e_v6'), ENV.get('N9E_DB_NAME', 'n9e_v6'),
+                         ENV['N9E_DB_USER'], 'PW_N9E')
+        bad += migrate_db(ENV.get('TOPO_DB_NAME', 'topo_studio'), ENV.get('TOPO_DB_NAME', 'topo_studio'),
+                          ENV['TOPO_DB_USER'], 'PW_TOPO')
+    finally:
+        stop_helper()
     print('[migrate] 完成,用时 %.0fs;%s' % (time.time() - t0, '全部一致' if not bad else '有问题,勿切换'))
     sys.exit(1 if bad else 0)
