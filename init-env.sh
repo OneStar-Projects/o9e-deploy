@@ -100,6 +100,7 @@ fix_mount_perms() {
     # logstash 的 config/pipeline 同为非 root 容器(uid 1000)读的 bind 挂载,
     # 需 o+r(文件)+ o+x(目录);umask 027 的机器 checkout 出来是 640/750,容器读不了。
     chmod -R o+rX "${DIR}/etc/logstash" 2>/dev/null || true
+    chmod -R o+rX "${DIR}/etc/nginx" 2>/dev/null || true
     echo "[init-env] 已修正 bind 挂载文件权限(initsql*/my.cnf/config.toml.tpl/etc/logstash 对 other 可读;tls 私钥不动)"
 }
 
@@ -191,6 +192,9 @@ fi
 
 # --- TLS 自签证书(容器内无法 apk 装 openssl,故在宿主预生成)---
 gen_tls_cert
+
+# --- nginx agent 接口入口日志目录(不存在时由 docker 以 root 创建,运维不便)---
+mkdir -p "${DIR}/logs/nginx"
 
 # --- 修正 bind 挂载文件权限(容器非 root 读取;checkout/pull 会抹掉 o+r)---
 fix_mount_perms

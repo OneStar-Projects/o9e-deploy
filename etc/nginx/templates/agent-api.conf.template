@@ -1,0 +1,37 @@
+# agent 接口入口(对外 17000,明文 HTTP)→ n9e:17000
+#
+# 只放行 agent 用到的接口:指标写入、心跳、配置同步。登录与管理 API 一律走 443(HTTPS)。
+# 按路径过滤,不按来源 IP:经 Docker 端口映射进来的来源地址已被替换成网关地址,无法做网段限制
+# (网段限制需改宿主防火墙,见 docs/security-backlog.md P1)。
+#
+# AGENT_API_ENFORCE=0:只记录不拦截(观察期);=1:非 agent 接口返回 403。
+# 日志:宿主 logs/nginx/agent-api.log,字段 path_ok=1 为 agent 接口。
+
+map $uri $agent_path_ok {
+    default                 0;
+    /prometheus/v1/write    1;
+    ~^/v1/n9e/heartbeat     1;
+    ~^/api/n9e/agent/       1;
+}
+
+map "${AGENT_API_ENFORCE}:$agent_path_ok" $agent_block {
+    default  0;
+    "1:0"    1;
+}
+
+log_format agent_api '$time_iso8601 $remote_addr path_ok=$agent_path_ok block=$agent_block '
+                     '$request_method $uri $status $body_bytes_sent $request_time';
+
+server {
+    listen 17000;
+    access_log /var/log/agent-api/agent-api.log agent_api;
+
+    location / {
+        if ($agent_block) { return 403; }
+        proxy_pass http://n9e:17000;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+}
