@@ -18,6 +18,8 @@
 
 配置中心升级需同时发布服务镜像和主机 Agent 安装包，详见 [配置中心升级说明](docs/cfgsync-upgrade.md)。
 
+自然语言查询与运维周报开关见 [部署说明](docs/ai-analysis-deployment.md)。
+
 ## 前置依赖
 
 - Docker 24+,docker compose v2
