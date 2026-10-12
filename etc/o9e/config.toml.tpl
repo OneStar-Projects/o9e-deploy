@@ -44,6 +44,12 @@ OpenRSA = false
 # N9E_DB_DSN 默认指向内置 MySQL,外部数据库时由 ./external-db-init.sh 写入 .env。
 DBType = "${DB_TYPE}"
 DSN = "${N9E_DB_DSN}"
+# 连接池:不写则全为 0,MaxIdleConns=0 会让每条 SQL 都新建连接
+# (PG / 金仓每个连接要起后端进程 + SCRAM 认证,373 个实例的主机渲染配置因此要 59s)。
+# MaxOpenConns 须小于数据库 max_connections(金仓默认 100,另有 topo-studio 等连接)。
+MaxLifetime = 7200
+MaxOpenConns = 50
+MaxIdleConns = 20
 
 [Redis]
 Address  = "redis:6379"
