@@ -1,0 +1,36 @@
+# 趋势分析预测引擎(可选):与主 compose 叠加使用,默认不部署。
+#   docker compose -f docker-compose.yaml -f docker-compose.forecast.yaml up -d
+# 主程序默认关闭预测,试点时在 .env 设 FORECAST_ENABLED=true;引擎只在内部网络,不对外开放端口。
+# 来源:n9e 仓库 sync/upstream-v9.1.1 的 deploy/single-node/docker-compose.forecast.yaml。
+services:
+  n9e:
+    environment:
+      FORECAST_ENGINE_TOKEN: ${FORECAST_ENGINE_TOKEN:?configure internal forecast authentication}
+      CONFIGTYPE_CENTER_FORECAST_ENABLED: ${FORECAST_ENABLED:-false}
+      CONFIGTYPE_CENTER_FORECAST_ENGINEURL: http://forecast-engine:8096
+      CONFIGTYPE_CENTER_FORECAST_ENGINEAUTHSECRETREF: FORECAST_ENGINE_TOKEN
+    depends_on:
+      forecast-engine: { condition: service_healthy }
+  forecast-engine:
+    image: fuqiangleon/o9e-forecast:${FORECAST_TAG:?set a tested forecast image version}
+    restart: unless-stopped
+    init: true
+    environment:
+      FORECAST_ENGINE_TOKEN: ${FORECAST_ENGINE_TOKEN:?configure internal forecast authentication}
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+    networks: [n9e]
+    # Internal-only: no published host port.
+    cpus: 2
+    mem_limit: 4g
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8096/health/ready',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
