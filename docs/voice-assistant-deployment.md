@@ -19,7 +19,7 @@ VOICE_UPSTREAM_PROXY=
 
 `gpt-realtime` 与转写模型均须验证当前账号的可用权限。OpenAI 使用官方 GA `wss://api.openai.com/v1/realtime`，不接普通 Chat Completions，也不接受浏览器传入模型或上游地址。输入转写是独立 ASR，可能与实时语音模型的实际理解存在差异。
 
-Google 使用 `VOICE_PROVIDER=google`、`GOOGLE_API_KEY`，通过 `VOICE_MODEL` 指定验收过的真实 Live 模型 ID，`VOICE_VOICE` 可留空。仅所选供应商的 key 必填；使用 OpenAI 不需要 Google key。为兼容原配置，未设供应商仍使用 Google，未设 Google 模型仍保留原 `gemini-3.8-live` 默认值；该默认 ID 未经真实账号验收，部署时应显式核验并设置，不能以旧默认值推断模型存在或可用。
+Google 使用 `VOICE_PROVIDER=google`、`GOOGLE_API_KEY`，通过 `VOICE_MODEL` 指定验收过的真实 Live 模型 ID，`VOICE_VOICE` 可留空。仅所选供应商的 key 必填；使用 OpenAI 不需要 Google key。未设供应商仍使用 Google，默认 Live 模型 `gemini-3.8-live` 已通过本次开发账号的真实连接、中文音频和工具续答验证；部署账号仍需自行核验权限。另设 `VOICE_TRANSCRIPTION_MODEL=gemini-3.5-flash-lite`，用于完整发言的音频转写校验，不接受模型改写的主机名直接执行查询。
 
 在 `voice-gateway/tls` 放置网关域名可信的 `fullchain.pem` / `privkey.pem`。保持 TLS 校验，供应商 key 不放在内网或浏览器。然后在该目录运行：
 
@@ -29,7 +29,7 @@ docker compose up -d
 docker compose ps
 ```
 
-健康检查只验证服务进程；模型账号和音频链路还需真实对讲验收。OpenAI 出口必须可达 `api.openai.com:443`，可用 `VOICE_UPSTREAM_PROXY=http://代理地址:端口` 显式配置 HTTP CONNECT 代理；默认直接连接，不自动把其他服务的代理配置用于语音上游。代理须支持 WebSocket，并保持正常 TLS 证书校验。Google 官方 Node SDK 上游 WebSocket 不自动读取 HTTP_PROXY，当前也不支持 `VOICE_UPSTREAM_PROXY`；Google 需要可用的直连出口，不能只验证 HTTP 请求成功。
+健康检查只验证服务进程；模型账号和音频链路还需真实对讲验收。OpenAI 出口必须可达 `api.openai.com:443`，Google 必须可达 `generativelanguage.googleapis.com:443`。两家均支持 `VOICE_UPSTREAM_PROXY=http://代理地址:端口` 显式配置 HTTP CONNECT 代理；默认直接连接，不自动读取其他服务的 HTTP_PROXY。代理须支持 WebSocket，并保持正常 TLS 证书校验。Google 连接适配使用固定官方路径，修正当前 SDK 产生的重复斜杠；不跟随任意上游重定向。
 
 修改供应商、模型、音色或转写模型后，需要重建网关容器。配置在进程启动时冻结，重启会中断现有连接；恢复绑定包含模型配置和凭据变化，配置不匹配时提示重新开始，不把旧恢复句柄用于新模型。当前 OpenAI 适配不提供原生会话恢复，任何已开始会话的断线重连都会提示重新开始，且不重跑旧查询。Google 只有收到有效原生恢复句柄后才可恢复。升级旧版本网关时建议先结束现有对讲，旧格式的恢复句柄将要求重新开始。
 
@@ -38,13 +38,15 @@ docker compose ps
 新版本网关强制启用运维话题检查，新增配置已写入 `voice-gateway/.env.example` 并映射到 Compose：
 
 ```dotenv
-# 空值默认：OpenAI gpt-4.1-mini / Google gemini-2.5-flash-lite
+# 空值默认：OpenAI gpt-4.1-mini / Google gemini-3.5-flash-lite
 VOICE_GUARDRAIL_MODEL=
 VOICE_GUARDRAIL_TIMEOUT_MS=8000
 VOICE_GUARDRAIL_MAX_CHECKS=200
 ```
 
-分类复用当前供应商的 API key，但需要另外验证文本模型权限和费用。模型 ID 需支持结构化 JSON；超时为 1–30000 毫秒，检查上限为每连接 1–1000 次。模型无权限、检查超时或服务异常均会停止对讲，不绕过检查。OpenAI 分类调用 `/v1/responses` 并沿用显式代理；Google 分类调用 `generateContent`，仍需直连官方域名。护栏配置和策略变化会使旧恢复绑定失效。
+分类复用当前供应商的 API key，但需要另外验证文本模型权限和费用。模型 ID 需支持结构化 JSON；超时为 1–30000 毫秒，检查上限为每连接 1–1000 次。模型无权限、检查超时或服务异常均会停止对讲，不绕过检查。OpenAI 分类调用 `/v1/responses`；Google 分类和完整发言转写调用 `generateContent`，均沿用所配置代理。护栏与转写配置变化会使旧恢复绑定失效。旧 Google 默认审核模型 `gemini-2.5-flash-lite` 对本次账号返回 404，新默认模型已完成两项真实话题判断；其他账号仍需验收。
+
+Google 转写按完整 PCM 发言审核，避免依赖 Live 事件中缺失的 `finished` 字段。按住说话使用显式边界，连续模式使用 700ms 静音分段及 300ms 前导音频；单段超过 30 秒结束通话。转写接口超时 15 秒，失败时关闭通话，不使用部分转写放行查询。每个完整发言最多执行一次运维查询，执行问题采用审核后的完整转写。每段会增加一次音频转写请求，其费用不属于 Live token 上限；转写尝试次数也受 `VOICE_GUARDRAIL_MAX_CHECKS` 限制，累计用户费用仍需后续接入。
 
 输入、工具问题和输出转写共同检查话题；只有输入与工具问题通过后才发起 n9e 查询。用户、业务组、数据源和资源权限继续由 n9e 硬校验。OpenAI 等完整输入转写审核后才启动回答；Google 自动生成，不能保证先审核再生成。输出为异步检查，部分违规音频可能在中断前已被听到，两家都不能保证零泄漏。
 
@@ -68,7 +70,7 @@ O9E_VOICE_MAX_SECONDS=1200
 
 二进制部署需要更新后端二进制及前端静态资源，并沿用 `[Center.Voice]` 的连接配置；新增播放反馈和字幕替换协议需前后端配套更新。仅更新公网网关无法补齐旧前端的 OpenAI 播放截断反馈。
 
-客户端须通过可信 HTTPS 访问系统，选择一个有权限的业务组，再点击语音对讲并允许麦克风。自签证书需由客户端信任企业 CA；部分浏览器不会在不可信安全上下文中提供麦克风 API。
+客户端须通过可信 HTTPS 访问系统，从“语音通话”进入独立通话抽屉，选择一个有权限的业务组，再点击电话按钮并允许麦克风。文字聊天保持原会话和状态；语音结果在通话抽屉显示，互不注入上下文。“收起通话”保留连接，关闭抽屉、隐藏助手或页面会释放录音。服务关闭或配置不完整会显示明确提示。自签证书需由客户端信任企业 CA；部分浏览器不会在不可信安全上下文中提供麦克风 API。
 
 ## 当前能力与验收
 
