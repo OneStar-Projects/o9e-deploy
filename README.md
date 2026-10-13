@@ -198,7 +198,8 @@ docker compose exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mys
 # 3. root 不能经网络登录 —— 预期 Access denied
 docker compose exec -T mysql sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql -uroot -h$(hostname -i) -e "select 1"'
 
-# 4. 对外端口 —— 预期只有 22、443、17000(启用日志监控时另有 5044/udp)
+# 4. 对外端口 —— 预期只有 22、443、17000(启用日志监控时另有 5044/udp,部署 DeepFlow 时另有 17001/17002);
+#    另会看到 60073(scanopy-daemon 用宿主网络、默认监听 0.0.0.0),对外不需要,收敛办法见「端口暴露」
 ss -lntH | awk '{print $4}' | grep -vE '^(127\.|\[::1\])' | sed -E 's/.*://' | sort -nu
 
 # 5. 部署目录无弱口令文本 —— 预期无输出(模式里用字符类,避免本文件自身含弱口令字面量)
@@ -238,12 +239,37 @@ Redis 是缓存 + cfgsync 临时态,可不备份。
 | 17000 | 对外 | nginx → n9e | agent 上报入口(明文 HTTP)。**只放行 agent 接口**(指标写入、心跳、配置同步),登录与管理 API 返回 403、只走 443。`AGENT_API_ENFORCE=0` 可临时只记录不拦截;日志 `logs/nginx/agent-api.log` |
 | 80 | 127.0.0.1(`HTTP_BIND`) | nginx | 仅做跳转 HTTPS |
 | 20090 | 127.0.0.1(`IBEX_RPC_BIND`) | nginx (stream) | ibex 远程执行;agent 未启用 |
-| 60072 | 127.0.0.1(`SCANOPY_BIND`) | scanopy | 拓扑发现服务端;本机 daemon 走 127.0.0.1,有远端 daemon 时才放开 |
+| 60072 | 127.0.0.1(`SCANOPY_BIND`) | scanopy | 拓扑发现**服务端**。本机 daemon 走 127.0.0.1;**其他机器的 daemon 主动连这个端口**领任务、交结果,有远端 daemon 时才放开(见下文「远端 scanopy daemon」) |
+| 60073 | 0.0.0.0(scanopy 默认,未收敛) | scanopy-daemon(宿主网络) | daemon 自身的管理接口。默认「daemon 主动拉任务」模式下**只有本机健康检查用,对外不需要**,其他机器的 daemon 也不连它。daemon 以特权运行并挂载 docker.sock,建议收敛,见表后说明 |
+| 17001 / 17002 | 对外(仅部署 DeepFlow 时) | deepflow-server | DeepFlow 控制面 / 数据面(容器内 20035 / 20033),装了 deepflow-agent 的主机连 |
 | 5044/udp | 对外(仅启用日志监控时) | logstash | NetFlow 入口(`NETFLOW_PORT`) |
 | 8428 / 3306 / 6379 / 5432 / 9200 | 不映射 | VM / MySQL / Redis / PG / ES | 仅容器内部 |
 
 > 宿主 firewalld 对 Docker 映射的端口**不生效**(Docker 自己的 DNAT 规则绕过它),
 > 所以端口收敛必须靠上面的绑定地址,不能只改 firewalld。
+
+**按场景需要对外开放的端口**(其余一律不开):
+
+| 端口 | 何时需要 |
+|------|------|
+| 443 | 始终(Web、登录) |
+| 17000 | 始终(agent 上报) |
+| 17001、17002 | 部署 DeepFlow 时 |
+| 5044/udp | 启用 NetFlow / 日志监控时 |
+| 60072 | 接入其他机器的 scanopy daemon 时 |
+
+60073 在任何场景下都不需要对外开放。
+
+**收敛 60073**:scanopy-daemon 用宿主网络,不经 Docker 端口映射,所以上面「firewalld 不生效」的限制**不适用于它**,可直接用宿主防火墙拦掉外部访问;
+也可以给 daemon 加环境变量 `SCANOPY_BIND_ADDRESS=127.0.0.1` 让它只监听本机(scanopy 支持此变量;本仓库 compose 尚未加,改动前需确认 daemon 处于默认的「daemon 主动拉任务」模式,否则服务端无法下发任务)。
+
+**远端 scanopy daemon**(在其他采集机上扫描各自网段):
+
+1. 用 `gen-scanopy-daemons.sh` 为每台采集机生成 daemon 配置,`SCANOPY_URL` 填 `http://<本机地址>:60072`
+2. 本机 `.env` 把 `SCANOPY_BIND` 改为 `0.0.0.0`(或指定网卡地址)后 `docker compose up -d scanopy`
+3. **只允许这些采集机访问 60072**:60072 是明文 HTTP(daemon 凭密钥接入);因它经 Docker 端口映射,firewalld 不生效,需在上游网络设备 / 安全组上限制来源
+4. 采集机若经负载均衡 / VIP / NAT 访问本机,转发规则里也要加上 60072
+5. 远端 daemon **不能**走 443 的 `/api/scanopy`:那条路径要求平台登录会话,是给浏览器用的
 
 ## 给被监控主机装 categraf
 

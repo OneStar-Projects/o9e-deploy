@@ -36,3 +36,4 @@
 | P11 | topo-studio 连库失败时静默回落内存存储(重启丢数据) | 低(可用性) | 代码改为连库失败即退出,由 `restart: always` 重试 | 待排期 |
 | P12 | 6456 上的加固备份目录含 `.env` 副本 | 低 | ecs1 上线稳定后删除 | 待删除 |
 | P13 | **构建机 92(192.168.50.92)ubuntu 的 sudo 口令为弱口令** | 中高:92 能推送镜像到 Docker Hub、持有代码仓库凭据,被拿下可污染所有部署的镜像 | 改为强口令;或把 ubuntu 加入 docker 组(`sudo usermod -aG docker ubuntu`),镜像直灌不再需要 sudo | 待处理 |
+| P14 | scanopy-daemon 的 60073 监听 0.0.0.0(上游默认;宿主网络,不受 `*_BIND` 控制) | 中低:daemon 特权运行并挂载 docker.sock,接口虽需密钥,但不应可被网络访问;经 VIP / NAT 等只转发指定端口时外部不可达,但同网段主机可直接访问 | 默认「daemon 主动拉任务」模式下 60073 只供本机健康检查:compose 给 daemon 加 `SCANOPY_BIND_ADDRESS=127.0.0.1`,或宿主防火墙拦外部访问(宿主网络下 firewalld 有效)。改后验证 `ss -ltn` 与 scanopy「发现扫描」仍可执行 | 待排期 |
