@@ -158,11 +158,15 @@ config:
 ## 故障排查
 
 ```bash
-# agent 状态(EXCEPTIONS 空 + STATE=NORMAL 才对;改控制口后带 --rpc-port 17001)
-deepflow-ctl --rpc-port 17001 agent list
+# controller api(30417)只绑 127.0.0.1,deepflow-ctl 默认连本机网卡 IP,必须带 --ip 127.0.0.1;
+# 连不上时它只打印 failed、退出码仍是 0,别凭退出码判断。
+# agent 状态(EXCEPTIONS 空 + STATE=NORMAL 才对)
+deepflow-ctl --ip 127.0.0.1 --api-port 30417 agent list
+# EXCEPTIONS 列在终端可能显示成乱码,看具体异常位:0x400000=磁盘空间熔断,0x100000=负载熔断
+curl -s 'http://127.0.0.1:30417/v1/vtaps/?name=<agent 名>' | python3 -c 'import sys,json; print(json.load(sys.stdin)["DATA"][0]["EXCEPTIONS"])'
 
 # 回读 group-config(确认第 2 处已落库:端口 + workload sync)
-deepflow-ctl --api-port 30417 agent-group-config list g-Ir1cV5gtqA -o yaml \
+deepflow-ctl --ip 127.0.0.1 --api-port 30417 agent-group-config list g-Ir1cV5gtqA -o yaml \
   | grep -E "controller_port|ingester_port|workload_resource_sync_enabled"
 
 # agent 注册不进 / 拓扑空,看 server 是不是死在没 VM(workload sync 没开的典型症状)

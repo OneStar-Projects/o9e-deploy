@@ -50,7 +50,9 @@ fi
 DEEPFLOW_VERSION="${DEEPFLOW_VERSION:-v7.1}"
 
 log() { printf '[deepflow-provision] %s\n' "$*"; }
-ctl() { deepflow-ctl --api-port "$API_PORT" "$@"; }
+# controller api 只绑 127.0.0.1(安全加固,见 docker-compose.yaml);deepflow-ctl 默认连本机网卡 IP,
+# 不显式指定会全部 connection refused。注意 deepflow-ctl 连不上时退出码仍是 0,只能看输出。
+ctl() { deepflow-ctl --ip 127.0.0.1 --api-port "$API_PORT" "$@"; }
 
 # ============ 1. 装 deepflow-ctl(缺失或版本不符才装)============
 # deepflow-ctl 是 ~71MB 二进制,故意不入 git;默认从 aliyun OSS 下(采集机既能拉镜像就能下)。
@@ -79,7 +81,7 @@ log "deepflow-ctl: $(deepflow-ctl -v 2>/dev/null | head -1 || echo '?')"
 # 全新首启：空卷 mysql initdb + clickhouse 起 + server 等它们可用才拉 api，常需 1~2 分钟，故给足 180s。
 log "等 controller api(127.0.0.1:${API_PORT})就绪(最多 180s)..."
 for i in $(seq 1 90); do
-    if ctl agent-group list >/dev/null 2>&1; then log "api ready"; break; fi
+    if ! ctl agent-group list 2>&1 | grep -qiE 'failed|refused'; then log "api ready"; break; fi
     [ "$i" = 90 ] && { log "FAIL: 180s 内 api 未就绪，查 docker compose ps 与 docker logs deepflow-server"; exit 1; }
     sleep 2
 done
