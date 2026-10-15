@@ -2198,3 +2198,75 @@ for s in pathlib.Path('.').glob('*/collect/*/schema.json'):
   跑完再统一判定，避免第一个失败掩盖后面的问题。
 - `o9e-nginx` 已连续运行 9 天且不参与重建，属于「不会被发版覆盖」的组件。
   它的配置若在这期间被改过，磁盘与运行态可能已经分叉，本次未核查。
+
+---
+
+## 2026-10-15　ecs1（生产）全新启动 DeepFlow server，9 台 agent 改指 ecs1
+
+### 背景
+
+生产已迁到 ecs1（网卡 `192.170.19.123`，对外 NAT `10.77.80.193`），DeepFlow server 一直没跟过去：
+6456 上的 deepflow 容器早已删除，各机 deepflow-agent 仍指 6456 的 VIP，全部连不上控制端、反复重启。
+
+### 变更前实测
+
+```text
+# ecs1:镜像与离线 deepflow-ctl 已就位,无容器
+$ docker ps -a | grep deepflow          → (空)
+$ ss -ltn | grep -E ':1700[12] '        → (空)
+# 各 agent(例:2.13、COSLOS-116)
+controller-ips: [10.77.64.56]           NRestarts=717 / 729,日志 Failed to dial controller 10.77.64.56:17001
+# ecs1 VM 里 deepflow 写回的指标(以 new_flow 为代表)
+min/max 时间 = 2026-09-13 / 2026-09-22，序列 20753   ← 9-22 之后 6456 上的 deepflow 已无产出
+```
+
+**不迁移 6456 的 deepflow 数据**：写回 n9e 的那部分已随 VM 30 天迁移进 ecs1；
+deepflow 自身库（MySQL 元数据 + ClickHouse 原始流量）只剩历史，用户确认不需要。
+
+### 变更内容
+
+1. `deepflow/.env`（原样照搬自 6456）：`NODE_IP_FOR_DEEPFLOW=192.170.19.123`、
+   `N9E_REMOTE_WRITE=http://192.170.19.123:17000/prometheus/v1/write`；`render-config.sh` 生成新的库口令。
+2. ecs1 上 10-08 遗留的旧 MySQL 数据挪走（不删）：`/data/deepflow/mysql.bak-20261015-113414`。
+3. `docker compose up -d --pull never`，再 `ADVERTISE_IP=10.77.80.193 ./deepflow-provision.sh`
+   （远端 agent 只到得了 NAT 地址）。
+4. 9 台 agent 的 `controller-ips` 改为 `10.77.80.193` 后重启 deepflow-agent（原配置均留 `.bak.20261015-*`）：
+
+| 主机 | 配置位置 |
+|---|---|
+| 2.13 | `/etc/deepflow-agent.yaml`（独立安装的官方 agent，不在 n9e-agents 包里） |
+| cosl-bqj、VoIP 10.185.92.18、COSLOS-116/IAM/18/124/188/147 | `/opt/n9e-agents/shared/deepflow-agent/deepflow-agent.yaml`（同步改 answers.env 的 `DEEPFLOW_CONTROLLER_IPS`） |
+
+### 踩坑：provision 假成功
+
+第一次跑 provision 打印「完成 ✓」，实际组和域都没建：
+
+```text
+curl (http://192.170.19.123:30417/v1/vtap-groups/) failed, (... connect: connection refused)
+```
+
+安全加固后 30417 只绑 127.0.0.1，而 `deepflow-ctl -i` 默认取本机网卡 IP；且 deepflow-ctl 连不上时**退出码仍是 0**，
+就绪检查和各步骤全被当成成功。已修：`ctl()` 显式 `--ip 127.0.0.1`，就绪检查改看输出（见 `deepflow-provision.sh`）。
+
+### 变更后验证
+
+```text
+$ deepflow-ctl --ip 127.0.0.1 --api-port 30417 agent list     → 9 台,STATE 全 NORMAL,GROUP legacy-host
+$ (ClickHouse) select agent_id, count() from flow_metrics.`application_map.1m` where time > now()-300 group by agent_id
+  1:209  2:79  3:102  4:266  5:1535  7:2156  8:1811  9:684      ← agent 6(COSLOS-18)为 0,见遗留
+$ (ecs1 VM) time()-timestamp(count(new_flow))                   → 262s(9-22 之后首次有新数据,写回 n9e 正常)
+$ docker stats  → deepflow 四容器合计约 2.3 GiB
+```
+
+### 回滚方法
+
+- agent：`cp -p <配置>.bak.20261015-<时间> <配置> && systemctl restart deepflow-agent`（但旧目标 6456 已无 server，回滚即断）。
+- server：`cd deepflow && docker compose down`；旧 MySQL 数据在 `mysql.bak-20261015-113414`，`.env` 原件在 `.env.bak.20261015-113414`。
+
+### 遗留
+
+- **COSLOS-18 无数据**：注册 NORMAL，但 EXCEPTIONS=`0x400000`（磁盘空间熔断），采集被 agent 自己停掉。
+  老问题，此前决定保留；它是 pod 最多的节点，这些 pod 的调用关系在「业务服务」拓扑里看不到。
+- server.yaml 的 `trisolaris.chrony.host` 仍是阿里云公网 NTP，ecs1 不出网连不上（不影响采集，agent 校时功能不可用）。
+- 6456 上的 deepflow 数据目录（`/opt/deepflow`）与 6456 自身已停用的 agent 未清理。
+- 本文件开头写的是「记录 cosl-6456 上的变更」，生产已迁 ecs1，标题说明待更新。
