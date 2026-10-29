@@ -2270,3 +2270,32 @@ $ docker stats  → deepflow 四容器合计约 2.3 GiB
 - server.yaml 的 `trisolaris.chrony.host` 仍是阿里云公网 NTP，ecs1 不出网连不上（不影响采集，agent 校时功能不可用）。
 - 6456 上的 deepflow 数据目录（`/opt/deepflow`）与 6456 自身已停用的 agent 未清理。
 - 本文件开头写的是「记录 cosl-6456 上的变更」，生产已迁 ecs1，标题说明待更新。
+
+---
+
+## 2026-10-30　ecs1（生产）开启登录页图形验证码
+
+### 变更内容
+
+ecs1 `etc/o9e/config.toml.tpl` 在 `[HTTP.RSA]` 后加 `[HTTP.ShowCaptcha] Enable = true`（与仓库 5c599a9 同内容），
+`docker compose restart n9e`。模板是单文件 bind mount，用原地写入保持 inode（改前改后 inode 均为 38225965），
+否则容器看不到新文件。备份 `config.toml.tpl.bak.20261030-074457`。ecs2 只跑 o9e-vm，无 n9e，不涉及。
+
+### 变更后验证（当前镜像，不含 n9e 69de3e18）
+
+```text
+GET  /auth/ifshowcaptcha                        → {"show":true}
+POST /auth/login 重启后、未取过验证码、不带字段 → HTTP 500(captchaStore 空指针,Recovery 兜住,日志 panic 2 次)
+POST /auth/captcha                              → 返回图片
+POST /auth/login 取过验证码后、不带字段         → "Username or password invalid"   ← 验证码被绕过,进了密码校验
+POST /auth/login 带错误验证码                   → "incorrect verification code"
+GET  /                                          → 200
+```
+
+### 遗留
+
+- **当前镜像下验证码只挡页面登录，挡不住脚本**：不带 captchaid/verifyvalue 时上游把空值判为通过。
+  修复在 n9e 69de3e18（空值拒绝 + 空指针），随下次镜像更新生效；更新后复测上面第 2、4 行应都返回
+  "incorrect verification code"。
+- 在此之前建议开启登录失败锁定（系统配置 `login_fail_count`，如 `300 5`），它不依赖镜像版本。
+- 回滚：用备份覆盖模板（`cat` 原地写回）后 `docker compose restart n9e`。
