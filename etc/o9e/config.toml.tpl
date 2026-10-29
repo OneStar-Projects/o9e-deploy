@@ -39,6 +39,12 @@ Enable = true
 [HTTP.RSA]
 OpenRSA = false
 
+# 登录页图形验证码:用户名密码登录必须先答对验证码(SSO 登录不经过)。
+# 写死 true 而不走 .env:envsubst 不支持默认值,漏配会渲染成空值、TOML 解析失败起不来。
+# 注意:n9e 镜像需含 69de3e18(空值绕过修复),之前的镜像不带验证码字段的请求仍能通过。
+[HTTP.ShowCaptcha]
+Enable = true
+
 [DB]
 # 由 compose 传入:DB_TYPE = mysql | postgres(PostgreSQL / 金仓 PG 兼容模式);
 # N9E_DB_DSN 默认指向内置 MySQL,外部数据库时由 ./external-db-init.sh 写入 .env。
