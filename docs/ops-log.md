@@ -2299,3 +2299,19 @@ GET  /                                          → 200
   "incorrect verification code"。
 - 在此之前建议开启登录失败锁定（系统配置 `login_fail_count`，如 `300 5`），它不依赖镜像版本。
 - 回滚：用备份覆盖模板（`cat` 原地写回）后 `docker compose restart n9e`。
+
+---
+
+## 2026-11-03　ecs1（生产）开启登录失败锁定
+
+等保整改 5.6「web 登录账号锁定机制」。n9e 已有锁定逻辑（`models/user.go` PassLogin），读数据库配置项
+`login_fail_count`，默认为空即关闭；界面没有设置入口。
+
+- 变更：管理员登录后 `PUT /api/n9e/config {"ckey":"login_fail_count","cval":"300 5"}`（改前为空）。
+  存在数据库 configs 表，每次登录实时读取，无需重启；不在本仓库里，重建库/迁移时需重新设置。
+- 含义：同一用户名累计失败 5 次后拒绝登录，计数在最后一次失败 300 秒后清零（≈ 错 5 次锁 5 分钟）。
+  只作用于用户名密码登录（LDAP 失败回落本地校验时也计数），SSO 不经过；不存在的用户名同样计数。
+- 验证：用不存在的账号 lockout-probe 连续错误登录 7 次，前 5 次 "Username or password invalid"，
+  第 6、7 次 "reach login fail count"。
+- 回滚：同一接口把 cval 改为空串。
+- 遗留：整改要求「配置截图」，目前无界面；密码复杂度 n9e 完全没有（仅限制长度 ≤31），均需开发。
