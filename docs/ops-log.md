@@ -2315,3 +2315,23 @@ GET  /                                          → 200
   第 6、7 次 "reach login fail count"。
 - 回滚：同一接口把 cval 改为空串。
 - 遗留：整改要求「配置截图」，目前无界面；密码复杂度 n9e 完全没有（仅限制长度 ≤31），均需开发。
+
+---
+
+## 2026-11-09　n9e 镜像更新到 9e5e23f4（6456 测试 → ecs1 生产，ecs2 只更新镜像）
+
+- 镜像：Jenkins `OneIT-n9e-image-v911` #27，构建机 92，`fuqiangleon/o9e:v911-ci`，n9e 提交 9e5e23f4
+  （含产品手册白屏修复、静态资源/内置帮助 404 修复、验证码空值绕过修复、SNMP 团体名走秘钥库、指标库 2301 条）。
+  未推镜像仓库：92 `docker save | gzip` → 139（C:\deploy）→ 6456、ecs1；ecs1 → ecs2 走内网
+  （ecs2 不认 139 的密钥，且 scp 报 `exec request failed`，改 `cat | ssh 'cat >'`）。三处 sha256 均为 b5f2d521…，
+  加载后末层 3052c985e3f4 与构建机一致。
+- 回滚：各机原镜像已打标签 `fuqiangleon/o9e:v911-ci-bak-20261109`；`docker tag` 回 v911-ci 后 `docker compose up -d --no-deps n9e`。
+- 6456（测试，金仓测试库）：首次迁移团体名 → 生成 snmp-community-1，SNMP 354 / UPS 8 / 专线 14 全部改为秘钥引用；
+  配置包占位符数 2.13=367、bqj=9 与实例数一致，无渲染错误。首次迁移时每个实例查一次秘钥名,
+  gorm 把 not found 记成 ERROR（约 380 条，一次性）。
+- ecs1（生产）：团体名在 11-06 08:58 的部署里已迁移（snmp-community-1/2，549 实例），本次 loader updated=0、无迁移。
+  验证：首页/443/内置帮助 200，验证码 show=true，不带或空验证码登录均返回 incorrect verification code（绕过已修），
+  指标库已设计 1350 条，58 台采集机 last_apply_status=applied。验证码开关与 ecs2 双写都在主机模板里，重建容器未丢。
+- ecs2（温备）：只加载镜像，n9e 未启动。
+- 2.13 的 config-sync 仍是 20260611 版：UPS/专线命令行里的嵌入占位符靠旧版整文件文本替换生效；
+  若升级到 20261014 包（不支持 input.exec 嵌入）会被拒收，需用含 exec 转义支持的新包。
