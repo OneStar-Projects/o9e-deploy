@@ -2335,3 +2335,107 @@ GET  /                                          → 200
 - ecs2（温备）：只加载镜像，n9e 未启动。
 - 2.13 的 config-sync 仍是 20260611 版：UPS/专线命令行里的嵌入占位符靠旧版整文件文本替换生效；
   若升级到 20261014 包（不支持 input.exec 嵌入）会被拒收，需用含 exec 转义支持的新包。
+
+---
+
+## 2026-11-11　n9e 镜像更新到 696f2c12（92 → 139 → ecs1 生产）
+
+照 11-09 的三步 scp 路径又走一遍，**镜像侧零意外**；但重建容器后 nginx 打旧上游，
+**全部 agent 的心跳与数据写入中断**，直到 reload 才恢复。这是同一个坑第三次出现，
+而现场流程里至今没有这一步。
+
+### 一、搬运与校验
+
+构建来自 Jenkins `OneIT-n9e-image-v911` #29（构建机 92，`fuqiangleon/o9e:v911-ci`，
+分支 sync/upstream-v9.1.1 的 696f2c12，含业务看板右栏收起、画布多链路与浮动锚点）。
+
+```
+92   docker save|gzip -1 → /tmp/o9e-v911-ci.tgz   136425038 字节  md5 d58d1052…
+ ↓   139 主动 scp 拉（139→92 免密）
+139  C:\Users\admin\                               md5 d58d1052…
+ ↓   139 scp 推（139→ecs1 免密，kylin@10.77.80.193）
+ecs1 /tmp/                                         md5 d58d1052…
+ ↓   docker load
+运行 5712aea69e6e   created 2026-11-11T15:37:18+08:00
+```
+
+校验仍是**比 rootfs layer + created，不比 image ID**：12 层 digest 与 92 逐行一致。
+
+> **别从本地 Mac 桥接。** 本次一开始图省事走了 `92 → Mac → 139`，被用户当场纠正。
+> 记忆 [[o9e-image-ship-from-builder]] 第 50-56 行早就写明了正确路径，是执行时没套用。
+> Mac 远、aTrust 不稳，大镜像必断（历史上在 25MB 处 Broken pipe 过）。
+
+### 二、两个把命令打断的坑
+
+**compose 服务名是 `n9e`，不是 `o9e`。** 容器名才叫 `o9e`。
+`docker compose up -d o9e topo-studio` 直接 `no such service: o9e`（空操作，未造成影响）。
+正确：`docker compose up -d n9e topo-studio`。完整对照：
+
+```
+n9e → o9e          topo-studio → o9e-topo-studio      nginx → o9e-nginx
+redis → o9e-redis  victoriametrics → o9e-vm           forecast-engine → n9e-single-forecast-engine-1
+```
+
+**Mac → 139(Windows cmd) → ecs1 三层嵌套里不能带管道/重定向。**
+`| head -10` 会被 139 的 cmd 吃掉，报 `'head' is not recognized`。
+`ssh -J cosl-vpn` 也走不通——免密关系是 **139→ecs1**（用 139 的密钥），Mac 没有 ecs1 的密钥，
+ProxyJump 会退化成要 askpass。
+**正解：把命令写成脚本文件 scp 过去，再用不含任何元字符的 `sh /tmp/x.sh` 执行**，口令走 stdin。
+
+### 三、nginx 上游失效——这次打到了 agent 上报
+
+重建后两个容器**互换了 IP**（`o9e` 拿到 172.18.0.7，172.18.0.6 变成了 `o9e-topo-studio`），
+而 `o9e-nginx` 已连续运行 4 周、不参与重建，上游地址还是它启动时解析的那一份：
+
+```
+connect() failed (111: Connection refused) while connecting to upstream,
+  upstream: "http://172.18.0.6:17000/v1/n9e/heartbeat",      client: 10.77.72.7
+  upstream: "http://172.18.0.6:17000/prometheus/v1/write",   client: 10.77.72.140
+```
+
+**受影响的不是页面，是 `/v1/n9e/heartbeat` 和 `/prometheus/v1/write`** ——
+客户端 IP 是现场采集机，也就是这段时间所有 agent 的心跳和写入全部被拒，数据有空洞。
+在 6456/142 上同样的故障只表现为首页 502，在 ecs1 上后果重得多。
+
+修复（先 `-t` 再 reload，配置有错时 nginx 保留旧 worker、不会更糟）：
+
+```bash
+docker exec o9e-nginx nginx -t && docker exec o9e-nginx nginx -s reload
+```
+
+> **这一步必须进现场部署流程。** 它已经在 2026-09-10（6456/142）和本次（ecs1）各踩一次，
+> `deploy-o9e-image.sh` 里虽已内置，但**现场这套不走那个脚本**，是手工 `docker compose up`。
+> 11-09 那节也没写。只要还靠手工 compose，每次重建都得跟一次 reload。
+
+### 四、回归
+
+```
+首页                200          版本接口 200 → v911-ci
+前端 bundle         assets/index-f5970abe.js
+告警引擎            42 条规则在评估
+运行镜像ID = 标签ID = 5712aea69e6e
+```
+
+**回归要走 443，不要走 17000** ——`/api/n9e/version` 打 17000 会被 nginx 白名单拦成 403，
+那是预期行为不是故障（本次第一遍回归就因此误判）。
+告警引擎的 `/metrics` 同理，要在容器内直取：`docker exec o9e sh -c "wget -qO- http://127.0.0.1:17000/metrics"`。
+
+### 五、回滚锚点
+
+```
+fuqiangleon/o9e:v911-ci-bak-20261111   c669abee225b   ← 本次之前在跑的
+fuqiangleon/o9e:v911-ci-bak-20261109   4115ab5f1e35
+docker tag fuqiangleon/o9e:v911-ci-bak-20261111 fuqiangleon/o9e:v911-ci
+cd /home/kylin/o9e-deploy && docker compose up -d n9e topo-studio
+docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
+```
+
+### 遗留
+
+- **本次不是跨版本升级**：现场 11-09 起就在 `v911-ci` 上，库结构早已迁过，
+  日志无任何迁移错误（`fill event target error … doesn't exist in cache` 是 INFO 级存量噪音，与本次无关）。
+  判断版本差异**必须比 image ID 或 created，不能比 tag 名**——`v911-ci` 是可变 tag，
+  92 上每次构建都覆盖同名，现场与构建机"同 tag"完全不代表同物。
+- 镜像线（`OneIT-n9e-image-v911`）与二进制线（`OneIT-n9e-v911`，部署 142）是两次独立构建，
+  取的 commit 可能差几个，**142 上验过不等于现场同样生效**，前端改动要在现场界面实测。
+- 139 上 `zjpkg.tgz`（221MB，湛江 agent 包）是他人暂存，本次未动。
