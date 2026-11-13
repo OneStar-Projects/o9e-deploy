@@ -208,7 +208,8 @@ h "$P" "docker exec o9e-nginx nginx -t"       || die "[$P] o9e-nginx 配置检�
 h "$P" "docker exec o9e-nginx nginx -s reload" || die "[$P] o9e-nginx reload 失败"
 
 say "    回归"
-VER="$(h "$P" 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:17000/api/n9e/version')"
+# 走 443 不走 17000:ecs1 加固后 17000 只放行 agent 白名单路径,其他路径一律 403(非故障)。
+VER="$(h "$P" 'curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1/api/n9e/version')"
 IDX="$(h "$P" 'curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1/')"
 say "    /api/n9e/version=$VER  首页=$IDX"
 [ "$VER" = "200" ] && [ "$IDX" = "200" ] || die "[$P] 接口回归失败,考虑回滚"
