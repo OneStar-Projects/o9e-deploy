@@ -173,7 +173,7 @@ if [ "$DO_DEPLOY" != "1" ]; then
     say "5/6 镜像已同步到现场,未加 --deploy,不重启服务(准备部署态)。"
     say "    上线:到 ecs1 跑  cd $DEPLOY_DIR && docker compose up -d --no-deps $SERVICE && docker exec o9e-nginx nginx -s reload"
     say "    回滚:docker tag ${IMAGE}-bak-${DATESTAMP} $IMAGE 后同样 up + nginx reload"
-    say "完成。记得按需删现场/139/92 上的 $PKG。"
+    say "完成。记得按需删现场/139/92 上的 ${PKG}。"
     exit 0
 fi
 
@@ -213,4 +213,4 @@ IDX="$(h "$P" 'curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1/')"
 say "    /api/n9e/version=$VER  首页=$IDX"
 [ "$VER" = "200" ] && [ "$IDX" = "200" ] || die "[$P] 接口回归失败,考虑回滚"
 say "完成。回滚:ssh $P \"docker tag ${IMAGE}-bak-${DATESTAMP} $IMAGE && cd $DEPLOY_DIR && docker compose up -d --no-deps $SERVICE && docker exec o9e-nginx nginx -s reload\""
-say "topo-studio 若同镜像需一并更新,核对 compose 后另跑;别忘了往 docs/ops-log.md 记一节,并按需删 $PKG。"
+say "topo-studio 若同镜像需一并更新,核对 compose 后另跑;别忘了往 docs/ops-log.md 记一节,并按需删 ${PKG}。"
