@@ -2439,3 +2439,26 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
 - 镜像线（`OneIT-n9e-image-v911`）与二进制线（`OneIT-n9e-v911`，部署 142）是两次独立构建，
   取的 commit 可能差几个，**142 上验过不等于现场同样生效**，前端改动要在现场界面实测。
 - 139 上 `zjpkg.tgz`（221MB，湛江 agent 包）是他人暂存，本次未动。
+
+---
+
+## 2026-11-13　n9e 镜像更新到 8ef2ebc07（92 → 139 → ecs1 生产 + ecs2 温备，首次用脚本）
+
+- 镜像：Jenkins `OneIT-n9e-image-v911` #35，构建机 92，`fuqiangleon/o9e:v911-ci`，n9e 提交 8ef2ebc07
+  （含拓扑大屏：绑定节点结构先行即画六边形消除矩形→六边形翻转、交互暂停覆盖平移/缩放/拖拽/方向键、
+  切换即时加载反馈、20s 轮询不再闪灰；告警按事件去重计数 + first_trigger_time；SNMP 端口 down 判定
+  ifOperStatus==2；画布列表复制功能）。
+- **首次改用脚本 `deploy-o9e-image-ecs.sh`**（参考 deploy-o9e-image.sh，封装 11-09/11-11 的三步路径）：
+  92 `sudo docker save|gzip`（口令读 n9e/.local/.p92）→ 139(cosl-vpn) certutil 校 sha → scp 推 ecs1 →
+  ecs1 `cat|ssh 192.170.19.27` 中转 ecs2。每跳 sha256=2cffbeb8…一致，load 后末层 9f20ab97… 与构建机一致。
+  ecs1/ecs2 原镜像自动打标签 `v911-ci-bak-20261113`（ecs1 锚点=5712aea6）。
+- ecs1（生产）：`compose up -d --no-deps n9e` 重建 o9e + **强制 nginx reload**；topo-studio 与 n9e 同镜像
+  （compose 都是 `fuqiangleon/o9e:${O9E_TAG}`），单独 `--no-deps topo-studio` 刷到 v911-ci 并再次 reload。
+  验证：o9e/topo-studio 均 Up healthy 跑 v911-ci，443 `/api/n9e/version`=200、首页 200、`/topo-studio/`=401（非 502）、
+  新 bundle `index-79c5eddd.js`。
+- ecs2（温备）：只加载镜像，n9e 未启动。
+- 脚本两个坑当场修（o9e-deploy a7032fb→9e77ae5）：① 收尾 `$PKG。`（变量紧贴中文句号）非 UTF-8 locale 下
+  `set -u` 报 unbound，改 `${PKG}`；② 回归照抄 6456 用 17000，**ecs1 加固后 17000 只放行 agent 白名单、
+  `/api/n9e/version` 恒 403**，改走 443。
+- 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261113 fuqiangleon/o9e:v911-ci` 后
+  `docker compose up -d --no-deps n9e topo-studio` + `nginx -s reload`。
