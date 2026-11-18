@@ -61,6 +61,8 @@ say() { echo "[ecs] $*"; }
 die() { echo "[ecs] ✗ $*" >&2; exit 1; }
 h()  { ssh $SSH_OPTS "$1" "$2" 2>/dev/null; }   # h <host> <cmd>  丢 stderr(登录横幅噪声)
 hv() { ssh $SSH_OPTS "$1" "$2"; }               # 保留 stderr,给会失败的关键步骤
+# 现场网络瞬断频繁(banner exchange timeout):关键传输步骤重试几次再 die
+retry() { local n="$1"; shift; local i; for i in $(seq 1 "$n"); do "$@" && return 0; echo "[ecs]     重试 $i/$n(可能网络瞬断)..." >&2; sleep 8; done; return 1; }
 
 TAG="${IMAGE##*:}"
 COMMIT="$(cd "$(dirname "$0")" && git -C . rev-parse --short HEAD 2>/dev/null || date +%Y%m%d)"
@@ -121,16 +123,26 @@ fi
 
 # ── 2. 92 导出镜像 + sha256 ────────────────────────────────────────────────
 if [ -n "$NEED" ]; then
-    say "2/6 在 92 导出镜像 → /tmp/$PKG"
-    bsudo "docker save $IMAGE | gzip -1 > /tmp/$PKG && chmod 644 /tmp/$PKG"
-    SHA="$(bsudo "sha256sum /tmp/$PKG" | awk '{print $1}')"
+    say "2/6 在 92 导出镜像 → /tmp/$PKG(后台 nohup,防现场网络瞬断 SIGHUP 掉长 ssh)"
+    # 清旧标记(root 拥有 + /tmp sticky,必须 sudo 删),否则残留 .done 让轮询命中旧空包。
+    bsudo "rm -f /tmp/$PKG /tmp/$PKG.done /tmp/$PKG.sha /tmp/$PKG.log" || die "92 清理旧包失败(sudo 口令?)"
+    # 整条进一个 sudo bash:docker save 必须 root;nohup 子进程脱离 ssh 会话,sleep 2 让 sudo
+    # 先读到口令再让 ssh 返回(否则 '&' 背景化会在 sudo 读 stdin 口令前关掉 ssh)。pipefail 防半截空包。
+    bsudo "bash -c 'nohup bash -c \"set -o pipefail; docker save $IMAGE | gzip -1 > /tmp/$PKG && chmod 644 /tmp/$PKG && sha256sum /tmp/$PKG > /tmp/$PKG.sha && touch /tmp/$PKG.done\" >/tmp/$PKG.log 2>&1 & sleep 2'"
+    say "    等 92 导出完成(轮询,ssh 断开不影响 92 后台任务)..."
+    for i in $(seq 1 120); do
+        [ "$(h "$BUILDER" "test -f /tmp/$PKG.done && echo y")" = "y" ] && break
+        sleep 10
+    done
+    [ "$(h "$BUILDER" "test -f /tmp/$PKG.done && echo y")" = "y" ] || die "92 导出未在 20 分钟内完成(查 92:/tmp/$PKG.log)"
+    SHA="$(h "$BUILDER" "cat /tmp/$PKG.sha" | awk '{print $1}')"
     [ -n "$SHA" ] || die "92 上算不出包的 sha256"
     say "    $PKG  sha256=${SHA:0:16}…"
 
     # ── 3. 92 → 139(Windows 中转暂存)─────────────────────────────────────
     say "3/6 92 → 139($RELAY)暂存"
     # 139 从 92 拉(139→92 免密);Windows 目标用反斜杠路径。
-    hv "$RELAY" "scp -o StrictHostKeyChecking=no $BUILDER_SSH:/tmp/$PKG \"$RELAY_DIR\\$PKG\"" \
+    retry 3 hv "$RELAY" "scp -o StrictHostKeyChecking=no $BUILDER_SSH:/tmp/$PKG \"$RELAY_DIR\\$PKG\"" \
         || die "139 从 92 拉包失败(检查 139→92 ssh 免密、92 上 /tmp/$PKG)"
     h "$RELAY" "certutil -hashfile \"$RELAY_DIR\\$PKG\" SHA256" | tr -d ' \r' | grep -qi "$SHA" \
         || die "139 上的包 sha256 与 92 不一致,传输损坏"
@@ -152,7 +164,7 @@ if [ -n "$NEED" ]; then
     # ecs2 的包必须经 ecs1 中转 → 只要 ecs2 要更新,ecs1 上就得先有包(即便 ecs1 本身已最新)。
     if want cosl-ecs1 || want cosl-ecs2; then
         say "4/6 139 → ecs1($ECS1_IP)"
-        hv "$RELAY" "scp -o StrictHostKeyChecking=no \"$RELAY_DIR\\$PKG\" kylin@$ECS1_IP:$ECS_DIR/$PKG" \
+        retry 3 hv "$RELAY" "scp -o StrictHostKeyChecking=no \"$RELAY_DIR\\$PKG\" kylin@$ECS1_IP:$ECS_DIR/$PKG" \
             || die "139 → ecs1 推包失败(检查 139→ecs1 免密、aTrust)"
         [ "$(h cosl-ecs1 "sha256sum $ECS_DIR/$PKG" | awk '{print $1}')" = "$SHA" ] || die "ecs1 上的包 sha256 与源不一致"
         say "    ecs1 收包 sha256 一致"
