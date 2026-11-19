@@ -2462,3 +2462,23 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
   `/api/n9e/version` 恒 403**，改走 443。
 - 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261113 fuqiangleon/o9e:v911-ci` 后
   `docker compose up -d --no-deps n9e topo-studio` + `nginx -s reload`。
+
+---
+
+## 2026-11-20　ecs1 告警规则英文名改为中文（14 条）
+
+- 背景：35 条规则里 14 条是英文名（net-port-down 等），恰是故障量最大的几条（net-port-down 24h 2148 次），
+  告警列表、大屏、通知里用户看不懂。规则备注本已写了中文说明，只改名称。
+- 做法：`PUT /api/n9e/busi-group/<bgid>/alert-rules/fields` 只传 `name` 一个字段，不整条写回
+  （避开「顶层 prom_ql 会吞掉 event_relabel_config」的坑）。逐条读回核对：rule_config、append_tags、
+  event_relabel_config、datasource_queries、通知、级别、启用、for 全部未变。
+- 对照：net-port-down→网络设备端口断开、net-packet-loss→网络设备丢包率高、net-icmp-down→网络设备离线、
+  net-port-flap→网络设备端口反复断开、net-port-errors→网络设备端口传输错误、net-port-discards→网络设备端口拥塞丢包、
+  net-high-rtt→网络设备响应延迟高、net-port-bandwidth→网络设备端口流量接近满载、net-device-reboot→网络设备发生重启、
+  net-snmp-down→网络设备监控数据中断、sqlserver-port-down→SQL Server 数据库端口不通、voip-mariadb-down→VoIP 数据库停止运行、
+  voip-process-down→VoIP 业务进程停止、alert-1→主机 CPU 使用率过高（alert-1 关联通知规则 1，通知标题随之变化）。
+- 影响：告警指纹不含规则名（Hash 只用 rule_id+序列标签+数据源+级别+查询），改名不会让活跃告警恢复再触发、不多发通知；
+  活跃告警在下次重复通知（≤60 分钟）时换成新名称，历史告警保留旧名。
+  采集类判定：4 条采集规则（网络设备离线、网络设备监控数据中断、UPS离线、动环采集中断）原本就带
+  append_tags `signal=collect`，前端按标签判定，改名不影响业务墙/看板/拓扑大屏的计数。
+- 回滚：完整规则备份在本地 `n9e/.local/rules-backup-20261120.json`（含全部 35 条），按 id 用同一接口把 name 改回即可。
