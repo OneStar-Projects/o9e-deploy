@@ -2482,3 +2482,21 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
   采集类判定：4 条采集规则（网络设备离线、网络设备监控数据中断、UPS离线、动环采集中断）原本就带
   append_tags `signal=collect`，前端按标签判定，改名不影响业务墙/看板/拓扑大屏的计数。
 - 回滚：完整规则备份在本地 `n9e/.local/rules-backup-20261120.json`（含全部 35 条），按 id 用同一接口把 name 改回即可。
+
+---
+
+## 2026-11-20（晚）　n9e 镜像更新到 9bf8bd559（92 → 139 → ecs1 生产，ecs2 本次未更新）
+
+- 镜像：Jenkins `OneIT-n9e-image-v911` #46，构建机 92，`fuqiangleon/o9e:v911-ci`，n9e 提交 9bf8bd559。
+  相对 11-18 现场镜像主要新增：大屏数字可点击下钻、告警行悬停显示规则说明、「在线」判据统一、
+  拓扑大屏节点放大；监控资源抽屉指标显示中文名/单位/说明（ecs1 实际上报的 452 个指标全覆盖）、
+  指标库 66 个乱码中文名修正、中文界面时长单位显示「周/天/小时/分钟」。
+- 脚本 `TARGETS=cosl-ecs1 ./deploy-o9e-image-ecs.sh --deploy -y`：各跳 sha256 一致、load 后末层 digest 与构建机一致；
+  原镜像打标签 `v911-ci-bak-20261120`。o9e 重建 + nginx reload，回归 version/首页 200。
+- topo-studio（同镜像）另行更新：现场链路不稳，为避免「重建后、reload 前断线」，在 ecs1 本机 nohup 跑
+  `compose up -d --no-deps topo-studio` → 等 healthy → `nginx -t && nginx -s reload`。
+- 验证：o9e / o9e-topo-studio 均 Up healthy 跑 v911-ci；443 首页 200、`/api/n9e/version` 200、`/topo-studio/` 401（非 502）；
+  nginx 近 60s 无上游错误；30 分钟前在写数据的主机在最近 3 分钟内全部仍在写（无掉线）；新 bundle `index-be979f17.js`。
+- 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261120 fuqiangleon/o9e:v911-ci` 后
+  `docker compose up -d --no-deps n9e topo-studio` + `nginx -s reload`。
+- 遗留：ecs2 温备仍是旧镜像；ecs1 `/tmp` 下的传输包 `o9e-v911-ci-1a1aef4.tar.gz` 未删。
