@@ -2500,3 +2500,19 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
 - 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261120 fuqiangleon/o9e:v911-ci` 后
   `docker compose up -d --no-deps n9e topo-studio` + `nginx -s reload`。
 - 遗留：ecs2 温备仍是旧镜像；ecs1 `/tmp` 下的传输包 `o9e-v911-ci-1a1aef4.tar.gz` 未删。
+
+---
+
+## 2026-11-21　n9e 镜像更新到 fee59fbfb（92 → 139 → ecs1 生产，ecs2 本次未更新）
+
+- 镜像：Jenkins `OneIT-n9e-image-v911` #47，n9e 提交 fee59fbfb（相对 11-20 的 9bf8bd559 只多这一个提交）。
+  内容：ecs1 页面实测发现的指标字典问题修正 —— 指标库 160 行「a / b * 100」类比率口径原被套到分子指标上，
+  导致当前连接数、打开文件数、磁盘临时表数显示成百分比（如 5648203%）；进程加和指标误显示「累计」；
+  MySQL 16 个内置名去掉英文前缀「Global Status / Global Variables」。
+- 过程：139 的 aTrust 断线约 40 分钟（route 0、139→ecs1 ssh 超时），用户重连后由后台任务连续 3 次确认
+  139→ecs1 可达才开跑。脚本 `--deploy` 重建 o9e + nginx reload；topo-studio 同镜像，在 ecs1 本机 nohup
+  `/tmp/topo-up.sh`（compose up --no-deps topo-studio → 等 healthy → nginx -t && reload）。
+- 原镜像打标签 `v911-ci-bak-20261121`。验证：o9e/topo-studio Up healthy；443 首页、`/api/n9e/version` 200，
+  `/topo-studio/` 401；nginx 近 60s 无上游错误；最近 3 分钟 76 台主机在写数据、无掉线。传输包已删。
+- 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261121 fuqiangleon/o9e:v911-ci` 后
+  `docker compose up -d --no-deps n9e topo-studio` + `nginx -s reload`。
