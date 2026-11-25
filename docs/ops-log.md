@@ -2541,3 +2541,20 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
 - 6456 操作：模板备份 `agent-api.conf.template.bak.20261125`；容器内按官方入口方式 envsubst 重渲染 `/etc/nginx/agent-api.conf`，
   `nginx -t` 通过后 `nginx -s reload`（未重启容器）。验证 ok=200、fail=500、slow 超时、target 开关 503/200 切换正常。
 - 说明：模板为 ecs1/6456 共用，ecs1 下次重渲染 nginx 模板时也会带上这几个静态路径（无副作用）。
+
+---
+
+## 2026-11-25　ecs1 四地 HTTP 拨测上线（实例 813 + 规则 40），并修正站点地址、新签装机 Token
+
+- 拨测实例：配置同步 `http_response` 实例 id 813 `dialtest-4region`（resource_name/instance 标签「四地拨测靶标」），
+  业务组 Default，目标 `http://10.77.64.56:17000/dialtest/target`、`/dialtest/ok`，GET，超时 5s，采集间隔 60s；
+  绑定 yjcollect2.13、cosl-bqj、cosl-tj-collector、cosl-zj-collector（每台仅此 1 个 http_response 实例，避开模板顶层 interval 多实例冲突）。
+  四地 8 条序列入库，result_code=0、response_code=200。
+- 告警规则 id 40「HTTP 拨测失败」：`http_response_result_code{instance="四地拨测靶标"} != 0 or http_response_response_code{…} >= 400`，
+  S2，执行频率 10 秒、持续时长 0，开恢复通知，不挂通知规则（按用户意见通知保持现状）。
+- 端到端演练：6456 上 touch `dialtest.down`（t0 20:15:41）→ 四地 first_trigger_time 均为 20:16:25（44 秒，时限 1.2×60=72 秒）；
+  删除开关后约 49 秒全部恢复。演练样本单独统计，不计入真实故障考核。
+- 站点地址 site_info.site_url：`http://172.20.0.7:17000`（容器内网地址，通知详情链接不可访问）→ `https://10.77.80.193`，其余字段不变。
+- 装机 Token：原 7 枚全部过期，新签 1 枚，有效期 90 天（2027-02-23 到期），明文仅存本地 `n9e/.local/enroll-token-20261125.json`。
+- 校时：湛江、北七家采集机无可达 NTP 源，装 `/usr/local/sbin/httptime-sync.sh` + `/etc/cron.d/httptime-sync`（每 10 分钟取 ecs1 HTTP Date，
+  偏差 ≥2 秒才调整并写硬件时钟），首次校正湛江 -14 秒、北七家 -99 秒；天津、10.185.92.18 改用内网 NTP 10.74.251.12（chrony）。
