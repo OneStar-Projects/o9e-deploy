@@ -84,6 +84,8 @@ services:
       - "--retentionPeriod=${VM_RETENTION:-3}"
       - "--httpListenAddr=:8428"
       - "--loggerTimezone=Asia/Shanghai"
+      # 默认 30s:即时查询看不到最近 30 秒的样本,告警引擎因此固定晚约 30 秒触发(告警及时性考核要求 ≤1.2 倍采集周期)
+      - "--search.latencyOffset=${VM_LATENCY_OFFSET:-1s}"
     volumes:
       - vm-data:/vm-data
     networks: [n9e]

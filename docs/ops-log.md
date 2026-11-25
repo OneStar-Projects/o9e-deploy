@@ -2516,3 +2516,15 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
   `/topo-studio/` 401；nginx 近 60s 无上游错误；最近 3 分钟 76 台主机在写数据、无掉线。传输包已删。
 - 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261121 fuqiangleon/o9e:v911-ci` 后
   `docker compose up -d --no-deps n9e topo-studio` + `nginx -s reload`。
+
+---
+
+## 2026-11-25　ecs1 VictoriaMetrics 查询延迟偏移 30s → 1s（告警提速约 30 秒）
+
+- 原因：VM 默认 `-search.latencyOffset=30s`，即时查询看不到最近 30 秒的样本，实测不带 nocache 的最新样本恒比当前早 30 秒，
+  告警引擎因此每条告警固定晚约 30 秒。测试用例 F-ALM-06（告警及时性 ≤1.2×采集周期、≥90%）在此前提下无法达标。
+- 改动：`docker-compose.yaml` 的 victoriametrics 加 `--search.latencyOffset=${VM_LATENCY_OFFSET:-1s}`（仓库与 ecs1 同步；
+  ecs1 原文件备份 `docker-compose.yaml.bak.20261125`），`docker compose up -d --no-deps victoriametrics`，11:37:02→11:37:28 healthy。
+- 验证：不带 nocache 的最新样本比当前早 0 秒；76 台主机正常写入；平台写 VM 报错只集中在 11:37 重启窗口（约 20 秒 connection refused，
+  这段数据断档），之后为 0。nginx 不直连 VM，无需 reload。
+- 回滚：去掉该行（或 `.env` 设 `VM_LATENCY_OFFSET=30s`）后同样 `up -d --no-deps victoriametrics`。
