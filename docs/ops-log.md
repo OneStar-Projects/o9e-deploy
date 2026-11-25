@@ -2575,3 +2575,18 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
   SPA 路由 `/biz-service` 正常 200。传输包已删。
 - 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261126 fuqiangleon/o9e:v911-ci` 后 `docker compose up -d --no-deps n9e topo-studio`
   + `nginx -s reload`（新增的业务状态表会保留，旧版本不读这些表，无影响）。
+
+---
+
+## 2026-11-26　ecs1 Guest 角色权限收回为浏览型只读（安全检查发现可提权）
+
+- 发现：全面检查渗透 4.1 同类风险时发现，ecs1 的 Guest 角色（id 3）有 108 个权限（Admin 109、Standard 52；产品默认 Guest 仅 6 个），
+  含 62 个写权限，其中 `/users/add|put|del`、`/roles/add|put|del` 等。用户与角色管理接口只校验权限点、不校验管理员，
+  因此任何 Guest 账号可新建用户、改他人口令、给自己加权限 —— 可提权。Guest 账号：penetration（渗透测试用）、demotest。
+  另因含 `/notification-channels`，Guest 可在通知媒介配置中看到 SMTP 明文口令。
+- 处置：`PUT /api/n9e/role/3/ops` 改为 29 个浏览型只读权限（大屏、仪表盘、告警、监控资源、拓扑画布、趋势、报表、查询页等），
+  去掉全部写权限及用户/团队/角色/数据源/通知媒介与模板/系统设置/大模型配置等敏感管理页。读回 29 个、无写权限残留；Admin/Standard 未动。
+  原 108 个权限备份在本地 `n9e/.local/guest-ops-ecs1.bak.20261126.json`。
+- 排查：7 个账号均由 admin 创建、角色仍为 3 个，未见 Guest 账号被利用的迹象（penetration 最近登录 11-04）。
+- 遗留：① 数据源编辑接口 `/datasource/desc`（仅管理员）与通知媒介接口仍返回明文口令，待代码脱敏修复；
+  ② 用户/角色管理接口建议加管理员校验做纵深防御；③ SMTP、ES 口令曾对 Guest 暴露，建议更换；④ 渗透复测结束后禁用 penetration。
