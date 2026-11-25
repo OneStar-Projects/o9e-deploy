@@ -2558,3 +2558,20 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
 - 装机 Token：原 7 枚全部过期，新签 1 枚，有效期 90 天（2027-02-23 到期），明文仅存本地 `n9e/.local/enroll-token-20261125.json`。
 - 校时：湛江、北七家采集机无可达 NTP 源，装 `/usr/local/sbin/httptime-sync.sh` + `/etc/cron.d/httptime-sync`（每 10 分钟取 ecs1 HTTP Date，
   偏差 ≥2 秒才调整并写硬件时钟），首次校正湛江 -14 秒、北七家 -99 秒；天津、10.185.92.18 改用内网 NTP 10.74.251.12（chrony）。
+
+---
+
+## 2026-11-26　n9e 镜像更新到 06f08475e（92 → 139 → ecs1 生产，ecs2 本次未更新）
+
+- 镜像：Jenkins `OneIT-n9e-image-v911` #52，n9e 提交 06f08475e（相对 11-21 的 fee59fbfb 共 94 个提交）。
+  主要内容：业务服务状态监控合入主干（业务状态/可用率/告警影响面/跨组引用/画布历史版本与回滚，新增 biz_status 相关表，
+  启动时在金仓自动建表）、拓扑大屏与客户绘制一致、节点告警角标下钻、渗透 4.2 修复（/api/、/v1/ 方法不匹配返 404）。
+- 上线前：142 已部署同版本（OneIT-n9e-v911 #68，SOURCE_BRANCH=sync/upstream-v9.1.1）并在 142 本机无头浏览器复测通过
+  （9 个大屏/业务服务页面无页面异常、监控资源抽屉中文指标正常、4.2 接口 404）。
+- 过程：第一次运行预检时 92 的 ssh 响应约 10 秒、撞脚本 15 秒超时退出（ecs1 未动）；重跑成功。各跳 sha256 一致、
+  load 后末层 digest 一致；原镜像打标签 `v911-ci-bak-20261126`。o9e 重建 + nginx reload；topo-studio 在 ecs1 本机 nohup 重建 + 再次 reload。
+- 验证：o9e/topo-studio Up healthy；首页、`/api/n9e/version` 200，`/topo-studio/` 401；nginx 近 60s 无上游错误；无掉线主机；
+  金仓建表无报错。渗透 4.2：`/api/n9e/datasource/list` DELETE/PUT/PATCH → 404（原 200），TRACE → 405，静态资源 PUT → 405，
+  SPA 路由 `/biz-service` 正常 200。传输包已删。
+- 回滚：`docker tag fuqiangleon/o9e:v911-ci-bak-20261126 fuqiangleon/o9e:v911-ci` 后 `docker compose up -d --no-deps n9e topo-studio`
+  + `nginx -s reload`（新增的业务状态表会保留，旧版本不读这些表，无影响）。
