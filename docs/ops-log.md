@@ -2528,3 +2528,16 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
 - 验证：不带 nocache 的最新样本比当前早 0 秒；76 台主机正常写入；平台写 VM 报错只集中在 11:37 重启窗口（约 20 秒 connection refused，
   这段数据断档），之后为 0。nginx 不直连 VM，无需 reload。
 - 回滚：去掉该行（或 `.env` 设 `VM_LATENCY_OFFSET=30s`）后同样 `up -d --no-deps victoriametrics`。
+
+---
+
+## 2026-11-25　6456 测试环境 17000 端口加拨测靶标 /dialtest/*
+
+- 用途：测试用例 F-RES-04（四片区拨测）与 F-ALM-06（告警及时性）需要可控故障的拨测目标。四地采集机（燕郊 2.13、北七家、天津、湛江）
+  实测只能访问 6456 VIP 10.77.64.56 的 17000 端口，故靶标放在 17000 的 server 块（`etc/nginx/templates/agent-api.conf.template`）。
+- 路径：`/dialtest/ok` 恒 200；`/dialtest/fail` 恒 500；`/dialtest/slow` 连不可达上游约 10 秒后 504；
+  `/dialtest/target` 受控靶标，宿主 `etc/nginx/conf.d/dialtest.down` 存在时 503、否则 200（切换无需 reload）。
+  只新增 location，原有 agent 路径白名单不变（实测 `/api/n9e/version` 仍 403）。
+- 6456 操作：模板备份 `agent-api.conf.template.bak.20261125`；容器内按官方入口方式 envsubst 重渲染 `/etc/nginx/agent-api.conf`，
+  `nginx -t` 通过后 `nginx -s reload`（未重启容器）。验证 ok=200、fail=500、slow 超时、target 开关 503/200 切换正常。
+- 说明：模板为 ecs1/6456 共用，ecs1 下次重渲染 nginx 模板时也会带上这几个静态路径（无副作用）。

@@ -26,6 +26,20 @@ server {
     listen 17000;
     access_log /var/log/agent-api/agent-api.log agent_api;
 
+    # 拨测靶标(测试用例 F-RES-04 / F-ALM-06,2026-11-25):四地采集机只能访问本机 VIP 的 17000,靶标放在这里。
+    #   /dialtest/ok      恒 200
+    #   /dialtest/fail    恒 500
+    #   /dialtest/slow    上游不可达,约 10 秒后 504(拨测 response_timeout 5s 判超时)
+    #   /dialtest/target  受控靶标:宿主 etc/nginx/conf.d/dialtest.down 存在时 503,否则 200(切换无需 reload)
+    location = /dialtest/ok     { default_type text/plain; return 200 "ok\n"; }
+    location = /dialtest/fail   { return 500; }
+    location = /dialtest/slow   { proxy_connect_timeout 10s; proxy_pass http://10.255.255.1:81; }
+    location = /dialtest/target {
+        if (-f /etc/nginx/conf.d/dialtest.down) { return 503; }
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
     location / {
         if ($agent_block) { return 403; }
         proxy_pass http://n9e:17000;
