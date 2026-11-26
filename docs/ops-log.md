@@ -2605,3 +2605,11 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
   o9e 重建 + nginx reload；topo-studio 在 ecs1 本机 nohup 重建 + 再次 reload。
 - 验证：o9e/topo-studio Up healthy；首页、`/api/n9e/version` 200，`/topo-studio/` 401；nginx 近 60s 无上游错误；无掉线主机；
   渗透 4.2 仍有效（DELETE/PUT/PATCH→404、TRACE→405）。4.1 两个接口的脱敏复验待管理员令牌。传输包已删。
+
+## 2026-11-27 部署 #56（760000b7f）到 ecs1 —— 渗透 4.1 desc/通知媒介脱敏闭环
+- 镜像 OneIT-n9e-image-v911 #56，源 760000b7f：含 P1 通知媒介密钥脱敏+保存保留（f04501faa）、P2 数据源 desc 闭环（73aefccfb）、阿里云 request.parameters 补遗（7dd1e5f20）、以及别人的拓扑大屏/AiChat 修复。构建节点 ubuntu-5092（=92 同机 192.168.50.92），镜像 created 北京 11-26 19:28。
+- 坑：首跑预检卡 92 ssh ~10s 撞脚本 15s 超时，在 1/6 预检退出（exit 0 但只到预检）；先 `ssh 92 echo` 热身连接后重跑即过（n9e-57 记过的坑②）。
+- 时区乌龙：92 镜像 created 是北京(+08)，本机是 NZ(+13)；19:28(+08) 对应 Jenkins #56 构建结束(北京 19:29)，一度误判成 #54，经 n9e-57 核对纠正。
+- 部署：`TARGETS=cosl-ecs1 --deploy -y`，各跳 sha256 一致、load 末层 digest 一致 ✓；旧镜像(#53 48fda7bf6)打标签 `v911-ci-bak-20261127`；o9e 重建 healthy + nginx reload；topo-studio ecs1 本机 `compose up -d --no-deps topo-studio` + nginx -t && reload。
+- 生产复验（管理员令牌）：4.2 /api/ DELETE/PUT/PATCH→404、TRACE→405、静态 PUT→405 ✓；4.1 list ES-1/VM-1 密码空 ✓；**desc ES-1 basic_auth(user=elastic) 密码脱敏成空 ✓（客户复测的点闭环）**；通知媒介 COSL-Email/Email SMTP password=******、**阿里云 Voice/SMS AccessKeyId/AccessKeySecret=****** ✓（补遗生效）**。
+- 传输包已删；回滚锚点 `v911-ci-bak-20261127`。
