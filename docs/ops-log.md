@@ -2590,3 +2590,18 @@ docker exec o9e-nginx nginx -s reload     # 回滚同样要 reload
 - 排查：7 个账号均由 admin 创建、角色仍为 3 个，未见 Guest 账号被利用的迹象（penetration 最近登录 11-04）。
 - 遗留：① 数据源编辑接口 `/datasource/desc`（仅管理员）与通知媒介接口仍返回明文口令，待代码脱敏修复；
   ② 用户/角色管理接口建议加管理员校验做纵深防御；③ SMTP、ES 口令曾对 Guest 暴露，建议更换；④ 渗透复测结束后禁用 penetration。
+
+---
+
+## 2026-11-26（下午）　n9e 镜像更新到 48fda7bf6（镜像 #53，92 → 139 → ecs1 生产）
+
+- 镜像：Jenkins `OneIT-n9e-image-v911` #53，n9e 提交 48fda7bf6。相对上午的 06f08475e 新增：渗透 4.1 闭环两项
+  （f04501faa 通知媒介接口密钥脱敏并在保存时保留原值；73aefccfb 数据源编辑接口 `/datasource/desc` 不再明文返回口令）、
+  网络拓扑大屏分区节点压框/标题遮挡/IP 截断修复。未含主干最新的 AI 对话框滚动修复（d8bfaaf59，在构建中的 #54 里）。
+- 按用户要求先部署 #53：停掉原「等 #54 构建完自动部署」的后台任务；导出前核对 92 镜像 created=北京 11:35（早于 #54 开始构建的 14:16）确认是 #53。
+- 插曲：本机 SOCKS 3334（`~/scripts/proxy_cosl.sh` 的 ssh -D）进程掉了，现场全部 ssh 失败而 aTrust 本身正常（139 直连 ecs1:22 通）；
+  用 `ssh -f -N -D 3334 … cosl-vpn` 重新拉起后恢复。
+- 部署：脚本 `--deploy` 各跳 sha256 一致、load 后末层 digest 一致；原镜像（06f08475e）打标签 `v911-ci-bak-20261126`（覆盖上午同名标签）；
+  o9e 重建 + nginx reload；topo-studio 在 ecs1 本机 nohup 重建 + 再次 reload。
+- 验证：o9e/topo-studio Up healthy；首页、`/api/n9e/version` 200，`/topo-studio/` 401；nginx 近 60s 无上游错误；无掉线主机；
+  渗透 4.2 仍有效（DELETE/PUT/PATCH→404、TRACE→405）。4.1 两个接口的脱敏复验待管理员令牌。传输包已删。
